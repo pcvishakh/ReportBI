@@ -1,0 +1,25 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.vs/
+
+# Node
+node_modules/
+
+# Build artifacts
+dist/
+out/
+
+# IDE
+.idea/
+.vscode/
+
+# Environment
+.env
+*.local
+
+# OS
+Thumbs.db
+.DS_Store

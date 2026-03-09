@@ -1,0 +1,425 @@
+import { useEffect, useMemo, useState } from "react";
+import { Adaptable } from "@adaptabletools/adaptable-react-aggrid";
+import type {
+  AdaptableApi,
+  AdaptableReadyInfo,
+  AdaptableState,
+  AdaptableStateFunctionConfig,
+} from "@adaptabletools/adaptable";
+
+import {
+  AllCommunityModule,
+  ModuleRegistry,
+  themeAlpine,
+  type GridApi,
+} from "ag-grid-community";
+import { AllEnterpriseModule } from "ag-grid-enterprise";
+
+import "@adaptabletools/adaptable-react-aggrid/base.css";
+import "@adaptabletools/adaptable-react-aggrid/themes/light.css";
+import "@adaptabletools/adaptable-react-aggrid/themes/dark.css";
+
+import "./index.css";
+import React from "react";
+
+ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule]);
+
+interface Report {
+  reportID: number;
+  reportName: string;
+  reportQuery: string;
+}
+
+interface ReportDataResponse {
+  data: Record<string, any>[];
+  gridState: string | null;
+}
+
+const API_BASE_URL = "http://localhost:5108/api/reports";
+
+function App() {
+  const [reports, setReports] = useState<Report[]>([]);
+  const [selectedReport, setSelectedReport] = useState<Report | null>(null);
+  const [reportData, setReportData] = useState<any[] | null>(null);
+  const [gridState, setGridState] = useState<string | null>(null);
+  const [loadingList, setLoadingList] = useState(true);
+  const [loadingData, setLoadingData] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ saveConfKey, setSaveConfKey ] = useState<string>("");
+  const adaptableApiRef = React.useRef<AdaptableApi>(null);
+  const aggridApiRef = React.useRef<GridApi>(null);
+
+  useEffect(() => {
+    fetchReports();
+  }, []);
+
+  const fetchReports = async () => {
+    try {
+      setLoadingList(true);
+      const res = await fetch(API_BASE_URL);
+      if (!res.ok) throw new Error("Failed to fetch reports");
+      const data = await res.json();
+      setReports(data);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoadingList(false);
+    }
+  };
+
+  const handleSelectReport = async (report: Report) => {
+    setSelectedReport(report);
+    setReportData(null);
+    setGridState(null);
+    setError(null);
+
+    try {
+      setLoadingData(true);
+      const res = await fetch(`${API_BASE_URL}/${report.reportID}/execute`);
+      if (!res.ok) throw new Error("Failed to execute report");
+      const result: ReportDataResponse = await res.json();
+      setReportData(result.data);
+      setGridState(result.gridState);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoadingData(false);
+    }
+  };
+
+  const agGridProps = useMemo(() => {
+    if (!reportData || reportData.length === 0) return {};
+
+    const columnDefs = Object.keys(reportData[0]).map((key) => ({
+      field: key,
+      headerName: key,
+      filter: true,
+      sortable: true,
+      resizable: true,
+      enableRowGroup: true,
+      enablePivot: true,
+      enableValue: true,
+    }));
+
+    return {
+      columnDefs,
+      rowData: reportData,
+      theme: themeAlpine,
+      defaultColDef: {
+        filter: true,
+        sortable: true,
+        resizable: true,
+        enableRowGroup: true,
+        enablePivot: true,
+        enableValue: true,
+      },
+      sideBar: {
+        toolPanels: [
+          {
+            id: 'columns',
+            labelDefault: 'Columns',
+            labelKey: 'columns',
+            iconKey: 'columns',
+            toolPanel: 'agColumnsToolPanel',
+            toolPanelParams: {
+              suppressRowGroups: false,
+              suppressValues: false,
+              suppressPivots: false,
+              suppressPivotMode: false,
+            },
+          },
+          {
+            id: 'filters',
+            labelDefault: 'Filters',
+            labelKey: 'filters',
+            iconKey: 'filter',
+            toolPanel: 'agFiltersToolPanel',
+          },
+        ],
+        defaultToolPanel: 'columns',
+      },
+      rowGroupPanelShow: 'always' as const,
+      pivotPanelShow: 'always' as const,
+    };
+  }, [reportData]);
+
+  const persistanceService = {
+    // If there is no saved state we pass the default state.
+    // If saved report we return that state and any additional changes.
+    loadAdaptableState: async (key: string) => {
+      // Expect keys like "Report_1"
+      const parts = key.split("_");
+      const idPart = parts[1];
+      const id = Number(idPart);
+
+      if (!Number.isFinite(id)) {
+        console.warn("Unable to derive report id from adaptableStateKey", key);
+        return {};
+      }
+
+      try {
+        // Use the GetReport endpoint so we don't re-execute the heavy query.
+        const res = await fetch(`${API_BASE_URL}/${id}`);
+        if (!res.ok) {
+          console.warn("Failed to load report for state", id, res.status);
+          return {};
+        }
+
+        const report = await res.json();
+        const storedState = report.gridState as string | null | undefined;
+
+        if (!storedState) {
+          return {};
+        }
+
+        try {
+          return JSON.parse(storedState);
+        } catch {
+          console.warn("Unable to parse stored grid state for report", id);
+          return {};
+        }
+      } catch (err) {
+        console.error("Error loading adaptable state from API", err);
+        return {};
+      }
+    },
+    persistAdaptableState: async (
+      state: Partial<AdaptableState>,
+      key: string,
+      _user: string,
+    ) => {
+      const parts = key.split("_");
+      const idPart = parts[1];
+      const id = Number(idPart);
+
+      if (!Number.isFinite(id)) {
+        console.warn("Unable to derive report id from adaptableStateKey", key);
+        return;
+      }
+
+      const serializedState = JSON.stringify(state);
+      setGridState(serializedState);
+
+      try {
+        await fetch(`${API_BASE_URL}/${id}/state`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            gridState: serializedState,
+          }),
+        });
+      } catch (err) {
+        console.error("Failed to persist adaptable state via API", err);
+      }
+    },
+  };
+  useEffect(() => {
+  adaptableApiRef.current?.stateApi.setAdaptableStateKey(saveConfKey);
+}, [ saveConfKey ]);
+
+  const adaptableOptions: any = useMemo(() => {
+    if (!selectedReport || !reportData || reportData.length === 0) return {};
+
+    const columns = Object.keys(reportData[0]);
+
+    const options = {
+      primaryKey: columns[0] || "id",
+      userName: "DefaultUser",
+      adaptableId: `Report_${selectedReport.reportID}`,
+      adaptableStateKey: `Report_${selectedReport.reportID}`,
+      licenseKey: "REPLACE_WITH_LICENSE_KEY_IF_APPLICABLE",
+      stateOptions: {
+        loadState: async (_config: AdaptableStateFunctionConfig) => {
+          return persistanceService.loadAdaptableState(_config.adaptableStateKey);
+        },
+        persistState: async (
+          _state: Partial<AdaptableState>,
+          config: AdaptableStateFunctionConfig,
+        ) => {
+          return persistanceService.persistAdaptableState(_state, config.adaptableStateKey, config.userName);
+        },
+      },
+      initialState: {
+        Dashboard: {
+          Revision: 1,
+          Tabs: [
+            {
+              Name: "Demo",
+              Toolbars: ["Layout", "ColumnFilter"],
+            },
+          ],
+        },
+        Theme: { CurrentTheme: "light" },
+        Layout: {
+          CurrentLayout: "Default",
+          Layouts: [
+            {
+              Name: "Default",
+              TableColumns: columns,
+            },
+          ],
+        },
+      },
+    };
+
+    return options;
+  }, [selectedReport, reportData, gridState]);
+
+  return (
+    <div
+      className="container"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100vh",
+        maxWidth: "none",
+        margin: "0",
+        padding: "0",
+      }}
+    >
+      <header
+        className="header"
+        style={{ padding: "1rem 2rem", borderBottom: "1px solid #ddd" }}
+      >
+        <h1 style={{ margin: 0, fontSize: "1.5rem" }}>ReportBI Client</h1>
+      </header>
+
+      {error && (
+        <div
+          className="error"
+          style={{
+            margin: "1rem",
+            padding: "1rem",
+            background: "#fee",
+            color: "#c00",
+            borderRadius: "4px",
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      <div
+        className="grid"
+        style={{ display: "flex", flex: 1, overflow: "hidden" }}
+      >
+        <aside
+          className="report-list"
+          style={{
+            width: "250px",
+            borderRight: "1px solid #ddd",
+            padding: "1rem",
+            overflowY: "auto",
+          }}
+        >
+          <h2 style={{ fontSize: "1.25rem" }}>Reports</h2>
+          {loadingList
+            ? <p className="loading">Loading reports...</p>
+            : reports.length === 0
+            ? <p className="loading">No reports found.</p>
+            : (
+              <ul style={{ listStyle: "none", padding: 0 }}>
+                {reports.map((report) => (
+                  <li
+                    key={report.reportID}
+                    style={{
+                      padding: "0.5rem",
+                      cursor: "pointer",
+                      marginBottom: "0.25rem",
+                      borderRadius: "4px",
+                      background: selectedReport?.reportID === report.reportID
+                        ? "#e6f7ff"
+                        : "transparent",
+                      color: selectedReport?.reportID === report.reportID
+                        ? "#1890ff"
+                        : "inherit",
+                      fontWeight: selectedReport?.reportID === report.reportID
+                        ? "bold"
+                        : "normal",
+                    }}
+                    onClick={() => handleSelectReport(report)}
+                  >
+                    {report.reportName}
+                  </li>
+                ))}
+              </ul>
+            )}
+        </aside>
+
+        <main
+          className="report-content"
+          style={{
+            flex: 1,
+            padding: "1rem",
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
+        >
+          {selectedReport
+            ? (
+              <>
+                <h2 style={{ fontSize: "1.25rem", marginBottom: "1rem" }}>
+                  {selectedReport.reportName}
+                </h2>
+                {loadingData
+                  ? <p className="loading">Executing report...</p>
+                  : reportData && reportData.length > 0 && Object.keys(adaptableOptions).length > 0
+                  ? (
+                    <div
+                      style={{
+                        flex: 1,
+                        display: "flex",
+                        flexDirection: "column",
+                        minHeight: 0,
+                      }}
+                    >
+                      <Adaptable.Provider
+                        key={selectedReport.reportID}
+                        adaptableOptions={adaptableOptions}
+                        gridOptions={agGridProps}
+                        modules={[AllCommunityModule, AllEnterpriseModule]}
+                      onAdaptableReady={ ({ adaptableApi, agGridApi }: AdaptableReadyInfo) => {
+                        // save a reference to adaptable api
+                        adaptableApiRef.current = adaptableApi;
+                        aggridApiRef.current = agGridApi;
+                        console.log("Adaptable grid is initialized and ready.")
+                        //This is responsible for loading the grid.
+                        setSaveConfKey(`Report_${selectedReport.reportID}`);
+                    } }
+                      >
+                        <div
+                          className="adaptable-container"
+                          style={{
+                            flex: 1,
+                            display: "flex",
+                            flexDirection: "column",
+                          }}
+                        >
+                          <Adaptable.UI />
+                          <div style={{ flex: 1 }}>
+                            <Adaptable.AgGridReact />
+                          </div>
+                        </div>
+                      </Adaptable.Provider>
+                    </div>
+                  )
+                  : reportData && reportData.length === 0
+                  ? <p>No data returned for this report.</p>
+                  : null}
+              </>
+            )
+            : (
+              <p className="loading" style={{ margin: "auto", color: "#999" }}>
+                Select a report from the list to view its data.
+              </p>
+            )}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+export default App;

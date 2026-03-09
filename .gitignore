@@ -1,0 +1,52 @@
+################################
+# Global ignores
+################################
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*.orig
+
+################################
+# Node / Vite (ReportClient)
+################################
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+*.tsbuildinfo
+
+# Env files
+.env
+.env.*.local
+
+################################
+# .NET / Visual Studio (ReportAPI)
+################################
+bin/
+obj/
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+################################
+# OS / tooling
+################################
+.idea/
+.vs/
+*.iml
+
