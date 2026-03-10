@@ -128,6 +128,7 @@ function App() {
       enableRowGroup: true,
       enablePivot: true,
       enableValue: true,
+      valueFormatter: "'$' + value",
     }));
 
     return {
