@@ -189,10 +189,7 @@ namespace ReportAPI.Services
 
             if (rowGroupedColumns.Any())
             {
-                for (int i = 0; i < rowGroupedColumns.Count; i++)
-                {
-                    visibleColumns.Add("Group");
-                }
+                visibleColumns.Add("Group");
             }
             visibleColumns.AddRange(originalVisibleColumns);
 
@@ -223,7 +220,7 @@ namespace ReportAPI.Services
 
             if (rowGroupedColumns.Any())
             {
-                WriteGroup(worksheet, filteredData, rowGroupedColumns, 0, visibleColumns, tableAggregationColumns, ref currentRow, 1);
+                WriteGroup(worksheet, filteredData, rowGroupedColumns, 0, visibleColumns, tableAggregationColumns, columnSorts, ref currentRow, 1);
                 
                 // Configure outline settings so groups are collapsible
                 worksheet.Outline.SummaryVLocation = XLOutlineSummaryVLocation.Top;
@@ -254,14 +251,14 @@ namespace ReportAPI.Services
             return ms.ToArray();
         }
 
-        private void WriteGroup(IXLWorksheet worksheet, IEnumerable<IDictionary<string, object>> data, List<string> groupCols, int groupLevel, List<string> visibleCols, List<AggregationDesc> aggs, ref int currentRow, int outlineLevel)
+        private void WriteGroup(IXLWorksheet worksheet, IEnumerable<IDictionary<string, object>> data, List<string> groupCols, int groupLevel, List<string> visibleCols, List<AggregationDesc> aggs, List<SortDesc> sorts, ref int currentRow, int outlineLevel)
         {
             if (groupLevel >= groupCols.Count)
             {
                 foreach (var row in data)
                 {
                     // Skip the 'Group' columns when rendering leaf row data
-                    for (int c = groupCols.Count; c < visibleCols.Count; c++)
+                    for (int c = 1; c < visibleCols.Count; c++)
                     {
                         var colName = visibleCols[c];
                         var val = row.ContainsKey(colName) ? row[colName] : null;
@@ -282,12 +279,20 @@ namespace ReportAPI.Services
             var col = groupCols[groupLevel];
             var grouped = data.GroupBy(r => r.ContainsKey(col) && r[col] != null ? r[col].ToString() : "(Blanks)").ToList();
 
-            foreach (var grp in grouped)
+            var sortDef = sorts.FirstOrDefault(s => s.ColumnId == col);
+            bool isDesc = sortDef != null && sortDef.SortOrder.Equals("Desc", StringComparison.OrdinalIgnoreCase);
+
+            var orderedGroups = isDesc 
+                ? grouped.OrderByDescending(g => double.TryParse(g.Key, out double d) ? d : (object)g.Key).ToList()
+                : grouped.OrderBy(g => double.TryParse(g.Key, out double d) ? d : (object)g.Key).ToList();
+
+            foreach (var grp in orderedGroups)
             {
-                string groupHeaderValue = grp.Key ?? "";
+                string indent = new string(' ', groupLevel * 4);
+                string groupHeaderValue = indent + (grp.Key ?? "");
                 groupHeaderValue += $" ({grp.Count()})";
 
-                worksheet.Cell(currentRow, groupLevel + 1).Value = groupHeaderValue;
+                worksheet.Cell(currentRow, 1).Value = groupHeaderValue;
 
                 foreach (var agg in aggs)
                 {
@@ -331,10 +336,9 @@ namespace ReportAPI.Services
                 {
                     worksheet.Row(currentRow).OutlineLevel = outlineLevel - 1;
                 }
-                
                 currentRow++;
 
-                WriteGroup(worksheet, grp.ToList(), groupCols, groupLevel + 1, visibleCols, aggs, ref currentRow, outlineLevel + 1);
+                WriteGroup(worksheet, grp.ToList(), groupCols, groupLevel + 1, visibleCols, aggs, sorts, ref currentRow, outlineLevel + 1);
             }
         }
 
