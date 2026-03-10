@@ -102,3 +102,7 @@ h1, h2, h3 {
   border-radius: 4px;
   border-left: 4px solid #e53e3e;
 }
+
+.ab-Grid .ag-pivot-mode-panel {
+  display: flex !important;
+}
