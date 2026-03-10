@@ -245,6 +245,41 @@ namespace ReportAPI.Services
                     if (double.TryParse(strVal, out double v4) && input0 is double i4)
                         return v4 <= i4;
                     return false;
+                case "Between":
+                case "NotBetween":
+                    if (predicate.Inputs.Count > 1)
+                    {
+                        var input1Str = predicate.Inputs[1]?.ToString() ?? "";
+                        
+                        // Try numeric between
+                        if (double.TryParse(strVal, out double v5) && 
+                            double.TryParse(inputStr, out double minNum) && 
+                            double.TryParse(input1Str, out double maxNum))
+                        {
+                            bool isBetween = v5 >= minNum && v5 <= maxNum;
+                            return predicate.PredicateId == "Between" ? isBetween : !isBetween;
+                        }
+
+                        // Try datetime between
+                        if (DateTime.TryParse(strVal, out DateTime dtVal) && 
+                            DateTime.TryParse(inputStr, out DateTime dtMin) && 
+                            DateTime.TryParse(input1Str, out DateTime dtMax))
+                        {
+                            bool isBetween = dtVal >= dtMin && dtVal <= dtMax;
+                            return predicate.PredicateId == "Between" ? isBetween : !isBetween;
+                        }
+                    }
+                    return false;
+                case "In":
+                case "NotIn":
+                    if (predicate.Inputs.Count > 0)
+                    {
+                        bool isIn = predicate.Inputs.Any(inp => 
+                            (inp?.ToString() ?? "").Equals(strVal, StringComparison.OrdinalIgnoreCase)
+                        );
+                        return predicate.PredicateId == "In" ? isIn : !isIn;
+                    }
+                    return false;
                 default:
                     return true;
             }
