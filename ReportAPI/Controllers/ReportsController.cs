@@ -90,10 +90,36 @@ namespace ReportAPI.Controllers
                 return StatusCode(500, ex.Message);
             }
         }
-    }
-
-    public class UpdateStateRequest
+    [HttpGet("{id}/export")]
+    public async Task<IActionResult> ExportReport(int id, [FromServices] ReportAPI.Services.ExportService exportService)
     {
-        public string GridState { get; set; } = string.Empty;
+        try
+        {
+            var report = await _repository.GetReportByIdAsync(id);
+            if (report == null)
+                return NotFound();
+
+            if (string.IsNullOrWhiteSpace(report.ConnectionString) || string.IsNullOrWhiteSpace(report.ReportQuery))
+                return BadRequest("Report missing connection string or query.");
+
+            var data = await _repository.ExecuteReportQueryAsync(report.ReportQuery, report.ConnectionString);
+
+            // Convert IEnumerable<dynamic> to IEnumerable<IDictionary<string, object>>
+            var parsedData = data.Cast<IDictionary<string, object>>();
+
+            var excelBytes = exportService.GenerateExcel(parsedData, report.GridState);
+
+            return File(excelBytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"{report.ReportName}_{DateTime.Now:yyyyMMddHHmmss}.xlsx");
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, ex.Message);
+        }
     }
+}
+
+public class UpdateStateRequest
+{
+    public string GridState { get; set; } = string.Empty;
+}
 }

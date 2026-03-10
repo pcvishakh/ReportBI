@@ -9,9 +9,9 @@ import type {
 
 import {
   AllCommunityModule,
+  type GridApi,
   ModuleRegistry,
   themeAlpine,
-  type GridApi,
 } from "ag-grid-community";
 import { AllEnterpriseModule } from "ag-grid-enterprise";
 
@@ -45,7 +45,7 @@ function App() {
   const [loadingList, setLoadingList] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [ saveConfKey, setSaveConfKey ] = useState<string>("");
+  const [saveConfKey, setSaveConfKey] = useState<string>("");
   const adaptableApiRef = React.useRef<AdaptableApi>(null);
   const aggridApiRef = React.useRef<GridApi>(null);
 
@@ -87,6 +87,31 @@ function App() {
     }
   };
 
+  const handleExportExcel = async () => {
+    if (!selectedReport) return;
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/${selectedReport.reportID}/export`,
+        {
+          method: "GET",
+        },
+      );
+      if (!res.ok) throw new Error("Failed to export report");
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${selectedReport.reportName}_export.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
   const agGridProps = useMemo(() => {
     if (!reportData || reportData.length === 0) return {};
 
@@ -116,11 +141,11 @@ function App() {
       sideBar: {
         toolPanels: [
           {
-            id: 'columns',
-            labelDefault: 'Columns',
-            labelKey: 'columns',
-            iconKey: 'columns',
-            toolPanel: 'agColumnsToolPanel',
+            id: "columns",
+            labelDefault: "Columns",
+            labelKey: "columns",
+            iconKey: "columns",
+            toolPanel: "agColumnsToolPanel",
             toolPanelParams: {
               suppressRowGroups: false,
               suppressValues: false,
@@ -129,17 +154,17 @@ function App() {
             },
           },
           {
-            id: 'filters',
-            labelDefault: 'Filters',
-            labelKey: 'filters',
-            iconKey: 'filter',
-            toolPanel: 'agFiltersToolPanel',
+            id: "filters",
+            labelDefault: "Filters",
+            labelKey: "filters",
+            iconKey: "filter",
+            toolPanel: "agFiltersToolPanel",
           },
         ],
-        defaultToolPanel: 'columns',
+        defaultToolPanel: "columns",
       },
-      rowGroupPanelShow: 'always' as const,
-      pivotPanelShow: 'always' as const,
+      rowGroupPanelShow: "always" as const,
+      pivotPanelShow: "always" as const,
     };
   }, [reportData]);
 
@@ -216,8 +241,8 @@ function App() {
     },
   };
   useEffect(() => {
-  adaptableApiRef.current?.stateApi.setAdaptableStateKey(saveConfKey);
-}, [ saveConfKey ]);
+    adaptableApiRef.current?.stateApi.setAdaptableStateKey(saveConfKey);
+  }, [saveConfKey]);
 
   const adaptableOptions: any = useMemo(() => {
     if (!selectedReport || !reportData || reportData.length === 0) return {};
@@ -232,13 +257,19 @@ function App() {
       licenseKey: "REPLACE_WITH_LICENSE_KEY_IF_APPLICABLE",
       stateOptions: {
         loadState: async (_config: AdaptableStateFunctionConfig) => {
-          return persistanceService.loadAdaptableState(_config.adaptableStateKey);
+          return persistanceService.loadAdaptableState(
+            _config.adaptableStateKey,
+          );
         },
         persistState: async (
           _state: Partial<AdaptableState>,
           config: AdaptableStateFunctionConfig,
         ) => {
-          return persistanceService.persistAdaptableState(_state, config.adaptableStateKey, config.userName);
+          return persistanceService.persistAdaptableState(
+            _state,
+            config.adaptableStateKey,
+            config.userName,
+          );
         },
       },
       initialState: {
@@ -361,12 +392,35 @@ function App() {
           {selectedReport
             ? (
               <>
-                <h2 style={{ fontSize: "1.25rem", marginBottom: "1rem" }}>
-                  {selectedReport.reportName}
-                </h2>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: "1rem",
+                  }}
+                >
+                  <h2 style={{ fontSize: "1.25rem", margin: 0 }}>
+                    {selectedReport.reportName}
+                  </h2>
+                  <button
+                    onClick={handleExportExcel}
+                    style={{
+                      padding: "0.5rem 1rem",
+                      background: "#1890ff",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Export Excel
+                  </button>
+                </div>
                 {loadingData
                   ? <p className="loading">Executing report...</p>
-                  : reportData && reportData.length > 0 && Object.keys(adaptableOptions).length > 0
+                  : reportData && reportData.length > 0 &&
+                      Object.keys(adaptableOptions).length > 0
                   ? (
                     <div
                       style={{
@@ -381,14 +435,18 @@ function App() {
                         adaptableOptions={adaptableOptions}
                         gridOptions={agGridProps}
                         modules={[AllCommunityModule, AllEnterpriseModule]}
-                      onAdaptableReady={ ({ adaptableApi, agGridApi }: AdaptableReadyInfo) => {
-                        // save a reference to adaptable api
-                        adaptableApiRef.current = adaptableApi;
-                        aggridApiRef.current = agGridApi;
-                        console.log("Adaptable grid is initialized and ready.")
-                        //This is responsible for loading the grid.
-                        setSaveConfKey(`Report_${selectedReport.reportID}`);
-                    } }
+                        onAdaptableReady={(
+                          { adaptableApi, agGridApi }: AdaptableReadyInfo,
+                        ) => {
+                          // save a reference to adaptable api
+                          adaptableApiRef.current = adaptableApi;
+                          aggridApiRef.current = agGridApi;
+                          console.log(
+                            "Adaptable grid is initialized and ready.",
+                          );
+                          //This is responsible for loading the grid.
+                          setSaveConfKey(`Report_${selectedReport.reportID}`);
+                        }}
                       >
                         <div
                           className="adaptable-container"
