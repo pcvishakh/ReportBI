@@ -13,6 +13,9 @@ namespace ReportAPI.Services
             List<SortDesc> columnSorts = new();
             List<FilterDesc> columnFilters = new();
 
+            List<string> rowGroupedColumns = new();
+            List<AggregationDesc> tableAggregationColumns = new();
+
             if (!string.IsNullOrWhiteSpace(gridStateJson))
             {
                 try
@@ -97,6 +100,23 @@ namespace ReportAPI.Services
                                 columnFilters.Add(filter);
                             }
                         }
+
+                        if (defaultLayout.TryGetProperty("RowGroupedColumns", out var rgcEl))
+                        {
+                            rowGroupedColumns = rgcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
+                        }
+
+                        if (defaultLayout.TryGetProperty("TableAggregationColumns", out var tacEl))
+                        {
+                            foreach (var aggItem in tacEl.EnumerateArray())
+                            {
+                                tableAggregationColumns.Add(new AggregationDesc
+                                {
+                                    ColumnId = aggItem.GetProperty("ColumnId").GetString() ?? "",
+                                    AggFunc = aggItem.GetProperty("AggFunc").GetString() ?? ""
+                                });
+                            }
+                        }
                     }
                 }
                 catch { }
@@ -147,9 +167,6 @@ namespace ReportAPI.Services
                     }
                     else
                     {
-                        // Simplified multi-sort - ideally use ThenBy, but relying on OrderBy stability is tricky in IQueryable but this is Objects
-                        // To keep it simple, applying order by sequentially in reverse might be stable, or just stick to primary sort for brevity
-                        // Actually, let's just use OrderBy/OrderByDescending to completely overwrite or build ThenBy via cast
                         var orderedQuery = (IOrderedQueryable<IDictionary<string, object>>)query;
                         if (sort.SortOrder.Equals("Desc", StringComparison.OrdinalIgnoreCase))
                             query = orderedQuery.ThenByDescending(x => x.ContainsKey(sort.ColumnId) ? x[sort.ColumnId] : null);
@@ -166,7 +183,23 @@ namespace ReportAPI.Services
                 tableColumns = filteredData.First().Keys.ToList();
             }
 
-            var visibleColumns = tableColumns.Where(c => !columnVisibility.TryGetValue(c, out var isVis) || isVis).ToList();
+            tableColumns.Remove("ag-Grid-AutoColumn");
+            var originalVisibleColumns = tableColumns.Where(c => !columnVisibility.TryGetValue(c, out var isVis) || isVis).ToList();
+            var visibleColumns = new List<string>();
+
+            if (rowGroupedColumns.Any())
+            {
+                for (int i = 0; i < rowGroupedColumns.Count; i++)
+                {
+                    visibleColumns.Add("Group");
+                }
+            }
+            visibleColumns.AddRange(originalVisibleColumns);
+
+            if (!visibleColumns.Any()) 
+            {
+                visibleColumns.Add("Data");
+            }
 
             // Build Excel
             using var workbook = new XLWorkbook();
@@ -175,22 +208,42 @@ namespace ReportAPI.Services
             // Headers
             for (int i = 0; i < visibleColumns.Count; i++)
             {
-                worksheet.Cell(1, i + 1).Value = visibleColumns[i];
+                string headerName = visibleColumns[i];
+                var aggDesc = tableAggregationColumns.FirstOrDefault(a => a.ColumnId == headerName);
+                if (aggDesc != null && !string.IsNullOrWhiteSpace(aggDesc.AggFunc))
+                {
+                    headerName = $"{aggDesc.AggFunc}({headerName})";
+                }
+
+                worksheet.Cell(1, i + 1).Value = headerName;
                 worksheet.Cell(1, i + 1).Style.Font.Bold = true;
             }
 
-            // Data
-            for (int r = 0; r < filteredData.Count; r++)
+            int currentRow = 2;
+
+            if (rowGroupedColumns.Any())
             {
-                var row = filteredData[r];
-                for (int c = 0; c < visibleColumns.Count; c++)
+                WriteGroup(worksheet, filteredData, rowGroupedColumns, 0, visibleColumns, tableAggregationColumns, ref currentRow, 1);
+                
+                // Configure outline settings so groups are collapsible
+                worksheet.Outline.SummaryVLocation = XLOutlineSummaryVLocation.Top;
+            }
+            else
+            {
+                // Flat Data
+                for (int r = 0; r < filteredData.Count; r++)
                 {
-                    var colName = visibleColumns[c];
-                    var val = row.ContainsKey(colName) ? row[colName] : null;
-                    if (val != null)
+                    var row = filteredData[r];
+                    for (int c = 0; c < visibleColumns.Count; c++)
                     {
-                        worksheet.Cell(r + 2, c + 1).Value = XLCellValue.FromObject(val);
+                        var colName = visibleColumns[c];
+                        var val = row.ContainsKey(colName) ? row[colName] : null;
+                        if (val != null)
+                        {
+                            worksheet.Cell(currentRow, c + 1).Value = XLCellValue.FromObject(val);
+                        }
                     }
+                    currentRow++;
                 }
             }
 
@@ -199,6 +252,90 @@ namespace ReportAPI.Services
             using var ms = new MemoryStream();
             workbook.SaveAs(ms);
             return ms.ToArray();
+        }
+
+        private void WriteGroup(IXLWorksheet worksheet, IEnumerable<IDictionary<string, object>> data, List<string> groupCols, int groupLevel, List<string> visibleCols, List<AggregationDesc> aggs, ref int currentRow, int outlineLevel)
+        {
+            if (groupLevel >= groupCols.Count)
+            {
+                foreach (var row in data)
+                {
+                    // Skip the 'Group' columns when rendering leaf row data
+                    for (int c = groupCols.Count; c < visibleCols.Count; c++)
+                    {
+                        var colName = visibleCols[c];
+                        var val = row.ContainsKey(colName) ? row[colName] : null;
+                        if (val != null)
+                        {
+                            worksheet.Cell(currentRow, c + 1).Value = XLCellValue.FromObject(val);
+                        }
+                    }
+                    if (outlineLevel > 1) 
+                    {
+                        worksheet.Row(currentRow).OutlineLevel = outlineLevel - 1;
+                    }
+                    currentRow++;
+                }
+                return;
+            }
+
+            var col = groupCols[groupLevel];
+            var grouped = data.GroupBy(r => r.ContainsKey(col) && r[col] != null ? r[col].ToString() : "(Blanks)").ToList();
+
+            foreach (var grp in grouped)
+            {
+                string groupHeaderValue = grp.Key ?? "";
+                groupHeaderValue += $" ({grp.Count()})";
+
+                worksheet.Cell(currentRow, groupLevel + 1).Value = groupHeaderValue;
+
+                foreach (var agg in aggs)
+                {
+                    // Find the index of the aggregated column in visible columns
+                    int colIndex = visibleCols.IndexOf(agg.ColumnId);
+                    
+                    if (colIndex >= 0)
+                    {
+                        object? aggResult = null;
+                        
+                        if (agg.AggFunc == "count")
+                        {
+                            aggResult = grp.Count();
+                        }
+                        else if (agg.AggFunc == "sum" || agg.AggFunc == "avg" || agg.AggFunc == "min" || agg.AggFunc == "max")
+                        {
+                            var vals = grp.Select(x => x.ContainsKey(agg.ColumnId) && double.TryParse(x[agg.ColumnId]?.ToString(), out double d) ? d : (double?)null)
+                                .Where(x => x.HasValue)
+                                .Select(x => x.Value)
+                                .ToList();
+                            
+                            if (vals.Any())
+                            {
+                                if (agg.AggFunc == "sum") aggResult = vals.Sum();
+                                if (agg.AggFunc == "avg") aggResult = vals.Average();
+                                if (agg.AggFunc == "min") aggResult = vals.Min();
+                                if (agg.AggFunc == "max") aggResult = vals.Max();
+                            }
+                        }
+
+                        if (aggResult != null)
+                        {
+                            // Output the raw aggregate result dynamically into the corresponding column of the Group row
+                            worksheet.Cell(currentRow, colIndex + 1).Value = XLCellValue.FromObject(aggResult);
+                        }
+                    }
+                }
+
+                worksheet.Row(currentRow).Style.Font.Bold = true;
+                if (outlineLevel > 1) 
+                {
+                    worksheet.Row(currentRow).OutlineLevel = outlineLevel - 1;
+                }
+                
+                currentRow++;
+
+                WriteGroup(worksheet, grp.ToList(), groupCols, groupLevel + 1, visibleCols, aggs, ref currentRow, outlineLevel + 1);
+            }
         }
 
         private bool EvaluatePredicate(object? value, PredicateDesc predicate)
@@ -303,5 +440,11 @@ namespace ReportAPI.Services
     {
         public string PredicateId { get; set; } = "";
         public List<object> Inputs { get; set; } = new();
+    }
+
+    public class AggregationDesc
+    {
+        public string ColumnId { get; set; } = "";
+        public string AggFunc { get; set; } = "";
     }
 }
