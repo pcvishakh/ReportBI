@@ -53,6 +53,10 @@ function App() {
     fetchReports();
   }, []);
 
+  useEffect(() => {
+    adaptableApiRef.current?.stateApi.setAdaptableStateKey(saveConfKey);
+  }, [saveConfKey]);
+
   const fetchReports = async () => {
     try {
       setLoadingList(true);
@@ -240,9 +244,6 @@ function App() {
       }
     },
   };
-  useEffect(() => {
-    adaptableApiRef.current?.stateApi.setAdaptableStateKey(saveConfKey);
-  }, [saveConfKey]);
 
   const adaptableOptions: any = useMemo(() => {
     if (!selectedReport || !reportData || reportData.length === 0) return {};

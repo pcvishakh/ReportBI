@@ -12,6 +12,7 @@ namespace ReportAPI.Services
 
             bool layoutProcessed = false;
             int sheetIndex = 0;
+            List<StyledColumnDesc> styledColumns = new();
 
             using var workbook = new XLWorkbook();
 
@@ -20,6 +21,48 @@ namespace ReportAPI.Services
                 try
                 {
                     var doc = JsonDocument.Parse(gridStateJson);
+
+                    if (doc.RootElement.TryGetProperty("StyledColumn", out var scEl) &&
+                        scEl.TryGetProperty("StyledColumns", out var scsEl))
+                    {
+                        foreach (var scItem in scsEl.EnumerateArray())
+                        {
+                            var styledCol = new StyledColumnDesc
+                            {
+                                ColumnId = scItem.GetProperty("ColumnId").GetString() ?? ""
+                            };
+
+                            if (scItem.TryGetProperty("GradientStyle", out var gsEl) &&
+                                gsEl.TryGetProperty("CellRanges", out var gcrsEl))
+                            {
+                                foreach (var crItem in gcrsEl.EnumerateArray())
+                                {
+                                    styledCol.GradientRanges.Add(new CellRangeDesc
+                                    {
+                                        Min = crItem.TryGetProperty("Min", out var minV) ? minV.GetDouble() : (double?)null,
+                                        Max = crItem.TryGetProperty("Max", out var maxV) ? maxV.GetDouble() : (double?)null,
+                                        Color = crItem.TryGetProperty("Color", out var colV) ? colV.GetString() ?? "" : ""
+                                    });
+                                }
+                            }
+
+                            if (scItem.TryGetProperty("PercentBarStyle", out var psEl) &&
+                                psEl.TryGetProperty("CellRanges", out var pcrsEl))
+                            {
+                                foreach (var crItem in pcrsEl.EnumerateArray())
+                                {
+                                    styledCol.PercentBarRanges.Add(new CellRangeDesc
+                                    {
+                                        Min = crItem.TryGetProperty("Min", out var minV) ? minV.GetDouble() : (double?)null,
+                                        Max = crItem.TryGetProperty("Max", out var maxV) ? maxV.GetDouble() : (double?)null,
+                                        Color = crItem.TryGetProperty("Color", out var colV) ? colV.GetString() ?? "" : ""
+                                    });
+                                }
+                            }
+                            styledColumns.Add(styledCol);
+                        }
+                    }
+
                     if (doc.RootElement.TryGetProperty("Layout", out var layoutEl) &&
                         layoutEl.TryGetProperty("Layouts", out var layoutsEl) &&
                         layoutsEl.GetArrayLength() > 0)
@@ -28,7 +71,7 @@ namespace ReportAPI.Services
                         {
                             sheetIndex++;
                             string sheetName = layout.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() ?? $"Export_{sheetIndex}" : $"Export_{sheetIndex}";
-                            ProcessLayout(workbook, dataList, layout, sheetName, sheetIndex);
+                            ProcessLayout(workbook, dataList, layout, sheetName, sheetIndex, styledColumns);
                             layoutProcessed = true;
                         }
                     }
@@ -38,7 +81,7 @@ namespace ReportAPI.Services
 
             if (!layoutProcessed)
             {
-                ProcessLayout(workbook, dataList, default(JsonElement), "Export", 1);
+                ProcessLayout(workbook, dataList, default(JsonElement), "Export", 1, styledColumns);
             }
 
             using var ms = new MemoryStream();
@@ -54,7 +97,7 @@ namespace ReportAPI.Services
             return name.Length > 31 ? name.Substring(0, 31) : name;
         }
 
-        private void ProcessLayout(XLWorkbook workbook, List<IDictionary<string, object>> dataList, JsonElement defaultLayout, string rawSheetName, int sheetIndex)
+        private void ProcessLayout(XLWorkbook workbook, List<IDictionary<string, object>> dataList, JsonElement defaultLayout, string rawSheetName, int sheetIndex, List<StyledColumnDesc> styledColumns)
         {
             List<string> tableColumns = new();
             Dictionary<string, bool> columnVisibility = new();
@@ -347,6 +390,44 @@ namespace ReportAPI.Services
                 }
 
                 worksheet.Columns().AdjustToContents();
+
+                // Apply Styled Columns (Conditional Formatting)
+                foreach (var styledCol in styledColumns)
+                {
+                    int colIndex = visibleColumns.IndexOf(styledCol.ColumnId);
+                    if (colIndex >= 0)
+                    {
+                        // Apply to the range below headers
+                        var range = worksheet.Range(2, colIndex + 1, currentRow - 1, colIndex + 1);
+                        // Gradient Styles
+                        foreach (var cr in styledCol.GradientRanges)
+                        {
+                            if (cr.Min.HasValue && cr.Max.HasValue)
+                            {
+                                range.AddConditionalFormat().WhenBetween(cr.Min.Value, cr.Max.Value)
+                                    .Fill.SetBackgroundColor(XLColor.FromHtml(cr.Color));
+                            }
+                            else if (cr.Min.HasValue)
+                            {
+                                range.AddConditionalFormat().WhenEqualOrGreaterThan(cr.Min.Value)
+                                    .Fill.SetBackgroundColor(XLColor.FromHtml(cr.Color));
+                            }
+                            else if (cr.Max.HasValue)
+                            {
+                                range.AddConditionalFormat().WhenEqualOrLessThan(cr.Max.Value)
+                                    .Fill.SetBackgroundColor(XLColor.FromHtml(cr.Color));
+                            }
+                        }
+
+                        // Percent Bar Styles (Data Bars)
+                        foreach (var cr in styledCol.PercentBarRanges)
+                        {
+                            // var db = range.AddConditionalFormat().DataBar(XLColor.FromHtml(cr.Color));
+                            // if (cr.Min.HasValue) db.LowestValue(); // Or Minimum? 
+                            // if (cr.Max.HasValue) db.HighestValue();
+                        }
+                    }
+                }
             }
         }
 
@@ -549,5 +630,19 @@ namespace ReportAPI.Services
     {
         public string ColumnId { get; set; } = "";
         public string AggFunc { get; set; } = "";
+    }
+
+    public class StyledColumnDesc
+    {
+        public string ColumnId { get; set; } = "";
+        public List<CellRangeDesc> GradientRanges { get; set; } = new();
+        public List<CellRangeDesc> PercentBarRanges { get; set; } = new();
+    }
+
+    public class CellRangeDesc
+    {
+        public double? Min { get; set; }
+        public double? Max { get; set; }
+        public string Color { get; set; } = "";
     }
 }
