@@ -7,6 +7,7 @@ namespace ReportAPI.Services
     {
         public byte[] GenerateExcel(IEnumerable<IDictionary<string, object>> data, string? gridStateJson)
         {
+            if (data == null) return Array.Empty<byte>();
             var dataList = data.ToList();
             List<string> tableColumns = new();
             Dictionary<string, bool> columnVisibility = new();
@@ -153,25 +154,25 @@ namespace ReportAPI.Services
             // Apply Sorting
             if (columnSorts.Any())
             {
-                var query = filteredData.AsQueryable();
+                var query = filteredData.AsEnumerable();
                 bool first = true;
                 foreach (var sort in columnSorts)
                 {
                     if (first)
                     {
                         if (sort.SortOrder.Equals("Desc", StringComparison.OrdinalIgnoreCase))
-                            query = query.OrderByDescending(x => x.ContainsKey(sort.ColumnId) ? x[sort.ColumnId] : null);
+                            query = query.OrderByDescending(x => x.ContainsKey(sort.ColumnId) && x[sort.ColumnId] != null && !string.IsNullOrWhiteSpace(x[sort.ColumnId].ToString()) ? x[sort.ColumnId] : null);
                         else
-                            query = query.OrderBy(x => x.ContainsKey(sort.ColumnId) ? x[sort.ColumnId] : null);
+                            query = query.OrderBy(x => x.ContainsKey(sort.ColumnId) && x[sort.ColumnId] != null && !string.IsNullOrWhiteSpace(x[sort.ColumnId].ToString()) ? x[sort.ColumnId] : null);
                         first = false;
                     }
                     else
                     {
-                        var orderedQuery = (IOrderedQueryable<IDictionary<string, object>>)query;
+                        var orderedQuery = (IOrderedEnumerable<IDictionary<string, object>>)query;
                         if (sort.SortOrder.Equals("Desc", StringComparison.OrdinalIgnoreCase))
-                            query = orderedQuery.ThenByDescending(x => x.ContainsKey(sort.ColumnId) ? x[sort.ColumnId] : null);
+                            query = orderedQuery.ThenByDescending(x => x.ContainsKey(sort.ColumnId) && x[sort.ColumnId] != null && !string.IsNullOrWhiteSpace(x[sort.ColumnId].ToString()) ? x[sort.ColumnId] : null);
                         else
-                            query = orderedQuery.ThenBy(x => x.ContainsKey(sort.ColumnId) ? x[sort.ColumnId] : null);
+                            query = orderedQuery.ThenBy(x => x.ContainsKey(sort.ColumnId) && x[sort.ColumnId] != null && !string.IsNullOrWhiteSpace(x[sort.ColumnId].ToString()) ? x[sort.ColumnId] : null);
                     }
                 }
                 filteredData = query.ToList();
@@ -277,14 +278,14 @@ namespace ReportAPI.Services
             }
 
             var col = groupCols[groupLevel];
-            var grouped = data.GroupBy(r => r.ContainsKey(col) && r[col] != null ? r[col].ToString() : "(Blanks)").ToList();
+            var grouped = data.GroupBy(r => r.TryGetValue(col, out var val) && val != null && !string.IsNullOrWhiteSpace(val.ToString()) ? val.ToString() : "(Blanks)").ToList();
 
             var sortDef = sorts.FirstOrDefault(s => s.ColumnId == col);
             bool isDesc = sortDef != null && sortDef.SortOrder.Equals("Desc", StringComparison.OrdinalIgnoreCase);
 
             var orderedGroups = isDesc 
-                ? grouped.OrderByDescending(g => double.TryParse(g.Key, out double d) ? d : (object)g.Key).ToList()
-                : grouped.OrderBy(g => double.TryParse(g.Key, out double d) ? d : (object)g.Key).ToList();
+                ? grouped.OrderByDescending(g => double.TryParse(g.Key, out double d) ? d : (object)(g.Key ?? "")).ToList()
+                : grouped.OrderBy(g => double.TryParse(g.Key, out double d) ? d : (object)(g.Key ?? "")).ToList();
 
             foreach (var grp in orderedGroups)
             {
