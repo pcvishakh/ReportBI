@@ -16,6 +16,9 @@ namespace ReportAPI.Services
 
             List<string> rowGroupedColumns = new();
             List<AggregationDesc> tableAggregationColumns = new();
+            List<string> pivotColumns = new();
+            List<string> pivotGroupedColumns = new();
+            List<AggregationDesc> pivotAggregationColumns = new();
 
             if (!string.IsNullOrWhiteSpace(gridStateJson))
             {
@@ -118,6 +121,24 @@ namespace ReportAPI.Services
                                 });
                             }
                         }
+
+                        if (defaultLayout.TryGetProperty("PivotColumns", out var pcEl))
+                            pivotColumns = pcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
+
+                        if (defaultLayout.TryGetProperty("PivotGroupedColumns", out var pgcEl))
+                            pivotGroupedColumns = pgcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
+
+                        if (defaultLayout.TryGetProperty("PivotAggregationColumns", out var pacEl))
+                        {
+                            foreach (var aggItem in pacEl.EnumerateArray())
+                            {
+                                pivotAggregationColumns.Add(new AggregationDesc
+                                {
+                                    ColumnId = aggItem.GetProperty("ColumnId").GetString() ?? "",
+                                    AggFunc = aggItem.GetProperty("AggFunc").GetString() ?? ""
+                                });
+                            }
+                        }
                     }
                 }
                 catch { }
@@ -201,51 +222,100 @@ namespace ReportAPI.Services
 
             // Build Excel
             using var workbook = new XLWorkbook();
-            var worksheet = workbook.Worksheets.Add("Export");
 
-            // Headers
-            for (int i = 0; i < visibleColumns.Count; i++)
+            if (pivotColumns.Any() || pivotGroupedColumns.Any())
             {
-                string headerName = visibleColumns[i];
-                var aggDesc = tableAggregationColumns.FirstOrDefault(a => a.ColumnId == headerName);
-                if (aggDesc != null && !string.IsNullOrWhiteSpace(aggDesc.AggFunc))
-                {
-                    headerName = $"{aggDesc.AggFunc}({headerName})";
+                var dataSheet = workbook.Worksheets.Add("RawData");
+                var allKeys = filteredData.Any() ? filteredData.First().Keys.ToList() : new List<string>();
+                
+                for (int i = 0; i < allKeys.Count; i++) {
+                    dataSheet.Cell(1, i + 1).Value = allKeys[i];
+                    dataSheet.Cell(1, i + 1).Style.Font.Bold = true;
+                }
+                
+                for (int r = 0; r < filteredData.Count; r++) {
+                    var row = filteredData[r];
+                    for (int c = 0; c < allKeys.Count; c++) {
+                        var colName = allKeys[c];
+                        if (row.TryGetValue(colName, out var v) && v != null && !string.IsNullOrWhiteSpace(v.ToString()))
+                            dataSheet.Cell(r + 2, c + 1).Value = XLCellValue.FromObject(v);
+                    }
                 }
 
-                worksheet.Cell(1, i + 1).Value = headerName;
-                worksheet.Cell(1, i + 1).Style.Font.Bold = true;
-            }
+                var ptSheet = workbook.Worksheets.Add("Pivot Export");
+                if (filteredData.Any()) 
+                {
+                    var sourceRange = dataSheet.Range(1, 1, filteredData.Count + 1, allKeys.Count);
+                    var pt = ptSheet.PivotTables.Add("PivotTable1", ptSheet.Cell(1, 1), sourceRange);
 
-            int currentRow = 2;
+                    foreach (var grp in pivotGroupedColumns) pt.RowLabels.Add(grp);
+                    foreach (var col in pivotColumns) pt.ColumnLabels.Add(col);
+                    foreach (var agg in pivotAggregationColumns) 
+                    {
+                        var field = pt.Values.Add(agg.ColumnId);
+                        if (agg.AggFunc == "sum") field.SummaryFormula = XLPivotSummary.Sum;
+                        else if (agg.AggFunc == "count") field.SummaryFormula = XLPivotSummary.Count;
+                        else if (agg.AggFunc == "avg") field.SummaryFormula = XLPivotSummary.Average;
+                        else if (agg.AggFunc == "min") field.SummaryFormula = XLPivotSummary.Minimum;
+                        else if (agg.AggFunc == "max") field.SummaryFormula = XLPivotSummary.Maximum;
+                    }
 
-            if (rowGroupedColumns.Any())
-            {
-                WriteGroup(worksheet, filteredData, rowGroupedColumns, 0, visibleColumns, tableAggregationColumns, columnSorts, ref currentRow, 1);
+                    pt.Theme = XLPivotTableTheme.PivotStyleMedium9;
+                    ptSheet.Style.Alignment.Vertical = XLAlignmentVerticalValues.Center;
+                    ptSheet.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+                }
                 
-                // Configure outline settings so groups are collapsible
-                worksheet.Outline.SummaryVLocation = XLOutlineSummaryVLocation.Top;
+                dataSheet.Hide();
+                ptSheet.Columns().AdjustToContents();
             }
             else
             {
-                // Flat Data
-                for (int r = 0; r < filteredData.Count; r++)
-                {
-                    var row = filteredData[r];
-                    for (int c = 0; c < visibleColumns.Count; c++)
-                    {
-                        var colName = visibleColumns[c];
-                        var val = row.ContainsKey(colName) ? row[colName] : null;
-                        if (val != null)
-                        {
-                            worksheet.Cell(currentRow, c + 1).Value = XLCellValue.FromObject(val);
-                        }
-                    }
-                    currentRow++;
-                }
-            }
+                var worksheet = workbook.Worksheets.Add("Export");
 
-            worksheet.Columns().AdjustToContents();
+                // Headers
+                for (int i = 0; i < visibleColumns.Count; i++)
+                {
+                    string headerName = visibleColumns[i];
+                    var aggDesc = tableAggregationColumns.FirstOrDefault(a => a.ColumnId == headerName);
+                    if (aggDesc != null && !string.IsNullOrWhiteSpace(aggDesc.AggFunc))
+                    {
+                        headerName = $"{aggDesc.AggFunc}({headerName})";
+                    }
+
+                    worksheet.Cell(1, i + 1).Value = headerName;
+                    worksheet.Cell(1, i + 1).Style.Font.Bold = true;
+                }
+
+                int currentRow = 2;
+
+                if (rowGroupedColumns.Any())
+                {
+                    WriteGroup(worksheet, filteredData, rowGroupedColumns, 0, visibleColumns, tableAggregationColumns, columnSorts, ref currentRow, 1);
+                    
+                    // Configure outline settings so groups are collapsible
+                    worksheet.Outline.SummaryVLocation = XLOutlineSummaryVLocation.Top;
+                }
+                else
+                {
+                    // Flat Data
+                    for (int r = 0; r < filteredData.Count; r++)
+                    {
+                        var row = filteredData[r];
+                        for (int c = 0; c < visibleColumns.Count; c++)
+                        {
+                            var colName = visibleColumns[c];
+                            var val = row.ContainsKey(colName) ? row[colName] : null;
+                            if (val != null && !string.IsNullOrWhiteSpace(val.ToString()))
+                            {
+                                worksheet.Cell(currentRow, c + 1).Value = XLCellValue.FromObject(val);
+                            }
+                        }
+                        currentRow++;
+                    }
+                }
+
+                worksheet.Columns().AdjustToContents();
+            }
 
             using var ms = new MemoryStream();
             workbook.SaveAs(ms);
