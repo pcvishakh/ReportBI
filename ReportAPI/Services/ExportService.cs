@@ -9,16 +9,11 @@ namespace ReportAPI.Services
         {
             if (data == null) return Array.Empty<byte>();
             var dataList = data.ToList();
-            List<string> tableColumns = new();
-            Dictionary<string, bool> columnVisibility = new();
-            List<SortDesc> columnSorts = new();
-            List<FilterDesc> columnFilters = new();
 
-            List<string> rowGroupedColumns = new();
-            List<AggregationDesc> tableAggregationColumns = new();
-            List<string> pivotColumns = new();
-            List<string> pivotGroupedColumns = new();
-            List<AggregationDesc> pivotAggregationColumns = new();
+            bool layoutProcessed = false;
+            int sheetIndex = 0;
+
+            using var workbook = new XLWorkbook();
 
             if (!string.IsNullOrWhiteSpace(gridStateJson))
             {
@@ -29,119 +24,149 @@ namespace ReportAPI.Services
                         layoutEl.TryGetProperty("Layouts", out var layoutsEl) &&
                         layoutsEl.GetArrayLength() > 0)
                     {
-                        var defaultLayout = layoutsEl[0]; // Assume first/default
-                        if (defaultLayout.TryGetProperty("TableColumns", out var tcEl))
+                        foreach (var layout in layoutsEl.EnumerateArray())
                         {
-                            tableColumns = tcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
-                        }
-
-                        if (defaultLayout.TryGetProperty("ColumnVisibility", out var cvEl))
-                        {
-                            foreach (var prop in cvEl.EnumerateObject())
-                            {
-                                columnVisibility[prop.Name] = prop.Value.GetBoolean();
-                            }
-                        }
-
-                        if (defaultLayout.TryGetProperty("ColumnSorts", out var csEl))
-                        {
-                            foreach (var sortItem in csEl.EnumerateArray())
-                            {
-                                columnSorts.Add(new SortDesc
-                                {
-                                    ColumnId = sortItem.GetProperty("ColumnId").GetString() ?? "",
-                                    SortOrder = sortItem.GetProperty("SortOrder").GetString() ?? "Asc"
-                                });
-                            }
-                        }
-
-                        if (defaultLayout.TryGetProperty("ColumnFilters", out var cfEl))
-                        {
-                            foreach (var filterItem in cfEl.EnumerateArray())
-                            {
-                                var filter = new FilterDesc
-                                {
-                                    ColumnId = filterItem.GetProperty("ColumnId").GetString() ?? "",
-                                    PredicatesOperator = filterItem.TryGetProperty("PredicatesOperator", out var po) ? po.GetString() ?? "AND" : "AND",
-                                    Predicates = new List<PredicateDesc>()
-                                };
-
-                                if (filterItem.TryGetProperty("Predicates", out var predEl))
-                                {
-                                    foreach (var p in predEl.EnumerateArray())
-                                    {
-                                        var inputs = new List<object>();
-                                        if (p.TryGetProperty("Inputs", out var inEl))
-                                        {
-                                            foreach (var inp in inEl.EnumerateArray())
-                                            {
-                                                switch (inp.ValueKind)
-                                                {
-                                                    case JsonValueKind.String:
-                                                        inputs.Add(inp.GetString()!);
-                                                        break;
-                                                    case JsonValueKind.Number:
-                                                        inputs.Add(inp.GetDouble());
-                                                        break;
-                                                    case JsonValueKind.True:
-                                                        inputs.Add(true);
-                                                        break;
-                                                    case JsonValueKind.False:
-                                                        inputs.Add(false);
-                                                        break;
-                                                }
-                                            }
-                                        }
-
-                                        filter.Predicates.Add(new PredicateDesc
-                                        {
-                                            PredicateId = p.GetProperty("PredicateId").GetString() ?? "",
-                                            Inputs = inputs
-                                        });
-                                    }
-                                }
-
-                                columnFilters.Add(filter);
-                            }
-                        }
-
-                        if (defaultLayout.TryGetProperty("RowGroupedColumns", out var rgcEl))
-                        {
-                            rowGroupedColumns = rgcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
-                        }
-
-                        if (defaultLayout.TryGetProperty("TableAggregationColumns", out var tacEl))
-                        {
-                            foreach (var aggItem in tacEl.EnumerateArray())
-                            {
-                                tableAggregationColumns.Add(new AggregationDesc
-                                {
-                                    ColumnId = aggItem.GetProperty("ColumnId").GetString() ?? "",
-                                    AggFunc = aggItem.GetProperty("AggFunc").GetString() ?? ""
-                                });
-                            }
-                        }
-
-                        if (defaultLayout.TryGetProperty("PivotColumns", out var pcEl))
-                            pivotColumns = pcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
-
-                        if (defaultLayout.TryGetProperty("PivotGroupedColumns", out var pgcEl))
-                            pivotGroupedColumns = pgcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
-
-                        if (defaultLayout.TryGetProperty("PivotAggregationColumns", out var pacEl))
-                        {
-                            foreach (var aggItem in pacEl.EnumerateArray())
-                            {
-                                pivotAggregationColumns.Add(new AggregationDesc
-                                {
-                                    ColumnId = aggItem.GetProperty("ColumnId").GetString() ?? "",
-                                    AggFunc = aggItem.GetProperty("AggFunc").GetString() ?? ""
-                                });
-                            }
+                            sheetIndex++;
+                            string sheetName = layout.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() ?? $"Export_{sheetIndex}" : $"Export_{sheetIndex}";
+                            ProcessLayout(workbook, dataList, layout, sheetName, sheetIndex);
+                            layoutProcessed = true;
                         }
                     }
                 }
                 catch { }
+            }
+
+            if (!layoutProcessed)
+            {
+                ProcessLayout(workbook, dataList, default(JsonElement), "Export", 1);
+            }
+
+            using var ms = new MemoryStream();
+            workbook.SaveAs(ms);
+            return ms.ToArray();
+        }
+
+        private string SanitizeSheetName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) name = "Sheet";
+            foreach (char c in new[] { '\\', '/', '*', '?', ':', '[', ']' })
+                name = name.Replace(c, '_');
+            return name.Length > 31 ? name.Substring(0, 31) : name;
+        }
+
+        private void ProcessLayout(XLWorkbook workbook, List<IDictionary<string, object>> dataList, JsonElement defaultLayout, string rawSheetName, int sheetIndex)
+        {
+            List<string> tableColumns = new();
+            Dictionary<string, bool> columnVisibility = new();
+            List<SortDesc> columnSorts = new();
+            List<FilterDesc> columnFilters = new();
+            List<string> rowGroupedColumns = new();
+            List<AggregationDesc> tableAggregationColumns = new();
+            List<string> pivotColumns = new();
+            List<string> pivotGroupedColumns = new();
+            List<AggregationDesc> pivotAggregationColumns = new();
+
+            if (defaultLayout.ValueKind == JsonValueKind.Object)
+            {
+                if (defaultLayout.TryGetProperty("TableColumns", out var tcEl))
+                {
+                    tableColumns = tcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
+                }
+
+                if (defaultLayout.TryGetProperty("ColumnVisibility", out var cvEl))
+                {
+                    foreach (var prop in cvEl.EnumerateObject())
+                    {
+                        columnVisibility[prop.Name] = prop.Value.GetBoolean();
+                    }
+                }
+
+                if (defaultLayout.TryGetProperty("ColumnSorts", out var csEl))
+                {
+                    foreach (var sortItem in csEl.EnumerateArray())
+                    {
+                        columnSorts.Add(new SortDesc
+                        {
+                            ColumnId = sortItem.GetProperty("ColumnId").GetString() ?? "",
+                            SortOrder = sortItem.GetProperty("SortOrder").GetString() ?? "Asc"
+                        });
+                    }
+                }
+
+                if (defaultLayout.TryGetProperty("ColumnFilters", out var cfEl))
+                {
+                    foreach (var filterItem in cfEl.EnumerateArray())
+                    {
+                        var filter = new FilterDesc
+                        {
+                            ColumnId = filterItem.GetProperty("ColumnId").GetString() ?? "",
+                            PredicatesOperator = filterItem.TryGetProperty("PredicatesOperator", out var po) ? po.GetString() ?? "AND" : "AND",
+                            Predicates = new List<PredicateDesc>()
+                        };
+
+                        if (filterItem.TryGetProperty("Predicates", out var predEl))
+                        {
+                            foreach (var p in predEl.EnumerateArray())
+                            {
+                                var inputs = new List<object>();
+                                if (p.TryGetProperty("Inputs", out var inEl))
+                                {
+                                    foreach (var inp in inEl.EnumerateArray())
+                                    {
+                                        switch (inp.ValueKind)
+                                        {
+                                            case JsonValueKind.String: inputs.Add(inp.GetString()!); break;
+                                            case JsonValueKind.Number: inputs.Add(inp.GetDouble()); break;
+                                            case JsonValueKind.True: inputs.Add(true); break;
+                                            case JsonValueKind.False: inputs.Add(false); break;
+                                        }
+                                    }
+                                }
+
+                                filter.Predicates.Add(new PredicateDesc
+                                {
+                                    PredicateId = p.GetProperty("PredicateId").GetString() ?? "",
+                                    Inputs = inputs
+                                });
+                            }
+                        }
+
+                        columnFilters.Add(filter);
+                    }
+                }
+
+                if (defaultLayout.TryGetProperty("RowGroupedColumns", out var rgcEl))
+                    rowGroupedColumns = rgcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
+
+                if (defaultLayout.TryGetProperty("TableAggregationColumns", out var tacEl))
+                {
+                    foreach (var aggItem in tacEl.EnumerateArray())
+                    {
+                        tableAggregationColumns.Add(new AggregationDesc
+                        {
+                            ColumnId = aggItem.GetProperty("ColumnId").GetString() ?? "",
+                            AggFunc = aggItem.GetProperty("AggFunc").GetString() ?? ""
+                        });
+                    }
+                }
+
+                if (defaultLayout.TryGetProperty("PivotColumns", out var pcEl))
+                    pivotColumns = pcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
+
+                if (defaultLayout.TryGetProperty("PivotGroupedColumns", out var pgcEl))
+                    pivotGroupedColumns = pgcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
+
+                if (defaultLayout.TryGetProperty("PivotAggregationColumns", out var pacEl))
+                {
+                    foreach (var aggItem in pacEl.EnumerateArray())
+                    {
+                        pivotAggregationColumns.Add(new AggregationDesc
+                        {
+                            ColumnId = aggItem.GetProperty("ColumnId").GetString() ?? "",
+                            AggFunc = aggItem.GetProperty("AggFunc").GetString() ?? ""
+                        });
+                    }
+                }
             }
 
             // Apply Filters
@@ -220,12 +245,16 @@ namespace ReportAPI.Services
                 visibleColumns.Add("Data");
             }
 
-            // Build Excel
-            using var workbook = new XLWorkbook();
-
             if (pivotColumns.Any() || pivotGroupedColumns.Any())
             {
-                var dataSheet = workbook.Worksheets.Add("RawData");
+                string dataSheetName = SanitizeSheetName(rawSheetName + "_Raw");
+                string ptSheetName = SanitizeSheetName(rawSheetName);
+
+                try { workbook.Worksheets.Worksheet(dataSheetName); dataSheetName = SanitizeSheetName(dataSheetName + "_" + sheetIndex); } catch { }
+                try { workbook.Worksheets.Worksheet(ptSheetName); ptSheetName = SanitizeSheetName(ptSheetName + "_p" + sheetIndex); } catch { }
+                if (dataSheetName == ptSheetName) dataSheetName += "_Raw";
+
+                var dataSheet = workbook.Worksheets.Add(dataSheetName);
                 var allKeys = filteredData.Any() ? filteredData.First().Keys.ToList() : new List<string>();
                 
                 for (int i = 0; i < allKeys.Count; i++) {
@@ -242,7 +271,7 @@ namespace ReportAPI.Services
                     }
                 }
 
-                var ptSheet = workbook.Worksheets.Add("Pivot Export");
+                var ptSheet = workbook.Worksheets.Add(ptSheetName);
                 if (filteredData.Any()) 
                 {
                     var sourceRange = dataSheet.Range(1, 1, filteredData.Count + 1, allKeys.Count);
@@ -270,7 +299,10 @@ namespace ReportAPI.Services
             }
             else
             {
-                var worksheet = workbook.Worksheets.Add("Export");
+                string rsName = SanitizeSheetName(rawSheetName);
+                try { workbook.Worksheets.Worksheet(rsName); rsName = SanitizeSheetName(rsName + "_" + sheetIndex); } catch { }
+                
+                var worksheet = workbook.Worksheets.Add(rsName);
 
                 // Headers
                 for (int i = 0; i < visibleColumns.Count; i++)
@@ -316,10 +348,6 @@ namespace ReportAPI.Services
 
                 worksheet.Columns().AdjustToContents();
             }
-
-            using var ms = new MemoryStream();
-            workbook.SaveAs(ms);
-            return ms.ToArray();
         }
 
         private void WriteGroup(IXLWorksheet worksheet, IEnumerable<IDictionary<string, object>> data, List<string> groupCols, int groupLevel, List<string> visibleCols, List<AggregationDesc> aggs, List<SortDesc> sorts, ref int currentRow, int outlineLevel)
