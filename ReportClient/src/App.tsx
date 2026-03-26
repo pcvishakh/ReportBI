@@ -27,12 +27,13 @@ ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule]);
 interface Report {
   reportID: number;
   reportName: string;
-  reportQuery: string;
+  columnDefinitions: string | null;
 }
 
 interface ReportDataResponse {
   data: Record<string, any>[];
   gridState: string | null;
+  columnDefinitions: string | null;
 }
 
 const API_BASE_URL = "http://localhost:5108/api/reports";
@@ -42,6 +43,7 @@ function App() {
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
   const [reportData, setReportData] = useState<any[] | null>(null);
   const [gridState, setGridState] = useState<string | null>(null);
+  const [columnDefinitions, setColumnDefinitions] = useState<string | null>(null);
   const [loadingList, setLoadingList] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,6 +77,7 @@ function App() {
     setSelectedReport(report);
     setReportData(null);
     setGridState(null);
+    setColumnDefinitions(null);
     setError(null);
 
     try {
@@ -84,6 +87,7 @@ function App() {
       const result: ReportDataResponse = await res.json();
       setReportData(result.data);
       setGridState(result.gridState);
+      setColumnDefinitions(result.columnDefinitions);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -119,17 +123,27 @@ function App() {
   const agGridProps = useMemo(() => {
     if (!reportData || reportData.length === 0) return {};
 
-    const columnDefs = Object.keys(reportData[0]).map((key) => ({
-      field: key,
-      headerName: key,
-      filter: true,
-      sortable: true,
-      resizable: true,
-      enableRowGroup: true,
-      enablePivot: true,
-      enableValue: true,
-      valueFormatter: "'$' + value",
-    }));
+    let columnDefs: any[] = [];
+    if (columnDefinitions) {
+      try {
+        columnDefs = JSON.parse(columnDefinitions);
+      } catch (e) {
+        console.error("Failed to parse backend column definitions", e);
+      }
+    }
+
+    if (columnDefs.length === 0 && reportData && reportData.length > 0) {
+      columnDefs = Object.keys(reportData[0]).map((key) => ({
+        field: key,
+        headerName: key,
+        filter: true,
+        sortable: true,
+        resizable: true,
+        enableRowGroup: true,
+        enablePivot: true,
+        enableValue: true,
+      }));
+    }
 
     return {
       columnDefs,
@@ -171,7 +185,7 @@ function App() {
       rowGroupPanelShow: "always" as const,
       pivotPanelShow: "always" as const,
     };
-  }, [reportData]);
+  }, [reportData, columnDefinitions]);
 
   const persistanceService = {
     // If there is no saved state we pass the default state.

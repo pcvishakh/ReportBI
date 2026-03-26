@@ -64,7 +64,8 @@ namespace ReportAPI.Controllers
                 return Ok(new
                 {
                     Data = data,
-                    GridState = report.GridState
+                    GridState = report.GridState,
+                    ColumnDefinitions = report.ColumnDefinitions
                 });
             }
             catch (Exception ex)

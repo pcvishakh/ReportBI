@@ -16,7 +16,7 @@ namespace ReportAPI.Repositories
 
         public async Task<IEnumerable<Report>> GetAllReportsAsync()
         {
-            var query = "SELECT ReportID, ReportName, ReportQuery, ReportConfig, GridState, ConnectionString FROM Reports";
+            var query = "SELECT ReportID, ReportName, ReportQuery, ReportConfig, GridState, ConnectionString, ColumnDefinitions FROM Reports";
             using var connection = _context.CreateConnection();
             var reports = await connection.QueryAsync<Report>(query);
             return reports;
@@ -24,7 +24,7 @@ namespace ReportAPI.Repositories
 
         public async Task<Report?> GetReportByIdAsync(int id)
         {
-            var query = "SELECT ReportID, ReportName, ReportQuery, ReportConfig, GridState, ConnectionString FROM Reports WHERE ReportID = @Id";
+            var query = "SELECT ReportID, ReportName, ReportQuery, ReportConfig, GridState, ConnectionString, ColumnDefinitions FROM Reports WHERE ReportID = @Id";
             using var connection = _context.CreateConnection();
             var report = await connection.QuerySingleOrDefaultAsync<Report>(query, new { Id = id });
             return report;

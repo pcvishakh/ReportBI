@@ -8,5 +8,6 @@ namespace ReportAPI.Models
         public string? ReportConfig { get; set; }
         public string? GridState { get; set; }
         public string? ConnectionString { get; set; }
+        public string? ColumnDefinitions { get; set; }
     }
 }
