@@ -6,6 +6,8 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 builder.Services.AddSingleton<DapperContext>();
 builder.Services.AddScoped<IReportRepository, ReportRepository>();
+builder.Services.AddScoped<ReportAPI.Services.IExportConfigParser, ReportAPI.Services.ExportConfigParser>();
+builder.Services.AddScoped<ReportAPI.Services.IDataProcessor, ReportAPI.Services.DataProcessor>();
 builder.Services.AddScoped<ReportAPI.Services.ExportService>();
 
 builder.Services.AddControllers();
