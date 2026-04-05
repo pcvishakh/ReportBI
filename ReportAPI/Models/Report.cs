@@ -10,4 +10,11 @@ namespace ReportAPI.Models
         public string? ConnectionString { get; set; }
         public string? ColumnDefinitions { get; set; }
     }
+
+    public class ColumnDefinition
+    {
+        public string Field { get; set; } = string.Empty;
+        public string HeaderName { get; set; } = string.Empty;
+        public string? DataType { get; set; }
+    }
 }

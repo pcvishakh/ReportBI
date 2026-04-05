@@ -27,7 +27,7 @@ namespace ReportAPI.Services
 
                 if (root.TryGetProperty("Layout", out var layoutEl) &&
                     layoutEl.TryGetProperty("Layouts", out var layoutsEl) &&
-                    layoutsEl.GetArrayLength() > 0)
+                    layoutsEl.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var layoutItem in layoutsEl.EnumerateArray())
                     {
@@ -48,7 +48,8 @@ namespace ReportAPI.Services
         {
             var styledColumns = new List<StyledColumnDesc>();
             if (root.TryGetProperty("StyledColumn", out var scEl) &&
-                scEl.TryGetProperty("StyledColumns", out var scsEl))
+                scEl.TryGetProperty("StyledColumns", out var scsEl) &&
+                scsEl.ValueKind == JsonValueKind.Array)
             {
                 foreach (var scItem in scsEl.EnumerateArray())
                 {
@@ -58,7 +59,8 @@ namespace ReportAPI.Services
                     };
 
                     if (scItem.TryGetProperty("GradientStyle", out var gsEl) &&
-                        gsEl.TryGetProperty("CellRanges", out var gcrsEl))
+                        gsEl.TryGetProperty("CellRanges", out var gcrsEl) &&
+                        gcrsEl.ValueKind == JsonValueKind.Array)
                     {
                         foreach (var crItem in gcrsEl.EnumerateArray())
                         {
@@ -67,7 +69,8 @@ namespace ReportAPI.Services
                     }
 
                     if (scItem.TryGetProperty("PercentBarStyle", out var psEl) &&
-                        psEl.TryGetProperty("CellRanges", out var pcrsEl))
+                        psEl.TryGetProperty("CellRanges", out var pcrsEl) &&
+                        pcrsEl.ValueKind == JsonValueKind.Array)
                     {
                         foreach (var crItem in pcrsEl.EnumerateArray())
                         {
@@ -98,44 +101,44 @@ namespace ReportAPI.Services
             if (layoutJson.TryGetProperty("Name", out var nameProp))
                 config.Name = nameProp.GetString() ?? "";
 
-            if (layoutJson.TryGetProperty("TableColumns", out var tcEl))
+            if (layoutJson.TryGetProperty("TableColumns", out var tcEl) && tcEl.ValueKind == JsonValueKind.Array)
                 config.TableColumns = tcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
 
-            if (layoutJson.TryGetProperty("ColumnVisibility", out var cvEl))
+            if (layoutJson.TryGetProperty("ColumnVisibility", out var cvEl) && cvEl.ValueKind == JsonValueKind.Object)
             {
                 foreach (var prop in cvEl.EnumerateObject())
                     config.ColumnVisibility[prop.Name] = prop.Value.ValueKind == JsonValueKind.True;
             }
 
-            if (layoutJson.TryGetProperty("ColumnSorts", out var csEl))
+            if (layoutJson.TryGetProperty("ColumnSorts", out var csEl) && csEl.ValueKind == JsonValueKind.Array)
             {
                 foreach (var sortItem in csEl.EnumerateArray())
                 {
                     config.ColumnSorts.Add(new SortDesc
                     {
-                        ColumnId = sortItem.GetProperty("ColumnId").GetString() ?? "",
-                        SortOrder = sortItem.GetProperty("SortOrder").GetString() ?? "Asc"
+                        ColumnId = sortItem.TryGetProperty("ColumnId", out var ci) ? ci.GetString() ?? "" : "",
+                        SortOrder = sortItem.TryGetProperty("SortOrder", out var so) ? so.GetString() ?? "Asc" : "Asc"
                     });
                 }
             }
 
-            if (layoutJson.TryGetProperty("ColumnFilters", out var cfEl))
+            if (layoutJson.TryGetProperty("ColumnFilters", out var cfEl) && cfEl.ValueKind == JsonValueKind.Array)
             {
                 foreach (var filterItem in cfEl.EnumerateArray())
                 {
                     var filter = new FilterDesc
                     {
-                        ColumnId = filterItem.GetProperty("ColumnId").GetString() ?? "",
+                        ColumnId = filterItem.TryGetProperty("ColumnId", out var ci) ? ci.GetString() ?? "" : "",
                         PredicatesOperator = filterItem.TryGetProperty("PredicatesOperator", out var po) ? po.GetString() ?? "AND" : "AND",
                         Predicates = new List<PredicateDesc>()
                     };
 
-                    if (filterItem.TryGetProperty("Predicates", out var predEl))
+                    if (filterItem.TryGetProperty("Predicates", out var predEl) && predEl.ValueKind == JsonValueKind.Array)
                     {
                         foreach (var p in predEl.EnumerateArray())
                         {
                             var inputs = new List<object>();
-                            if (p.TryGetProperty("Inputs", out var inEl))
+                            if (p.TryGetProperty("Inputs", out var inEl) && inEl.ValueKind == JsonValueKind.Array)
                             {
                                 foreach (var inp in inEl.EnumerateArray())
                                 {
@@ -151,7 +154,7 @@ namespace ReportAPI.Services
 
                             filter.Predicates.Add(new PredicateDesc
                             {
-                                PredicateId = p.GetProperty("PredicateId").GetString() ?? "",
+                                PredicateId = p.TryGetProperty("PredicateId", out var pid) ? pid.GetString() ?? "" : "",
                                 Inputs = inputs
                             });
                         }
@@ -160,35 +163,35 @@ namespace ReportAPI.Services
                 }
             }
 
-            if (layoutJson.TryGetProperty("RowGroupedColumns", out var rgcEl))
+            if (layoutJson.TryGetProperty("RowGroupedColumns", out var rgcEl) && rgcEl.ValueKind == JsonValueKind.Array)
                 config.RowGroupedColumns = rgcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
 
-            if (layoutJson.TryGetProperty("TableAggregationColumns", out var tacEl))
+            if (layoutJson.TryGetProperty("TableAggregationColumns", out var tacEl) && tacEl.ValueKind == JsonValueKind.Array)
             {
                 foreach (var aggItem in tacEl.EnumerateArray())
                 {
                     config.TableAggregationColumns.Add(new AggregationDesc
                     {
-                        ColumnId = aggItem.GetProperty("ColumnId").GetString() ?? "",
-                        AggFunc = aggItem.GetProperty("AggFunc").GetString() ?? ""
+                        ColumnId = aggItem.TryGetProperty("ColumnId", out var ci) ? ci.GetString() ?? "" : "",
+                        AggFunc = aggItem.TryGetProperty("AggFunc", out var af) ? af.GetString() ?? "" : ""
                     });
                 }
             }
 
-            if (layoutJson.TryGetProperty("PivotColumns", out var pcEl))
+            if (layoutJson.TryGetProperty("PivotColumns", out var pcEl) && pcEl.ValueKind == JsonValueKind.Array)
                 config.PivotColumns = pcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
 
-            if (layoutJson.TryGetProperty("PivotGroupedColumns", out var pgcEl))
+            if (layoutJson.TryGetProperty("PivotGroupedColumns", out var pgcEl) && pgcEl.ValueKind == JsonValueKind.Array)
                 config.PivotGroupedColumns = pgcEl.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
 
-            if (layoutJson.TryGetProperty("PivotAggregationColumns", out var pacEl))
+            if (layoutJson.TryGetProperty("PivotAggregationColumns", out var pacEl) && pacEl.ValueKind == JsonValueKind.Array)
             {
                 foreach (var aggItem in pacEl.EnumerateArray())
                 {
                     config.PivotAggregationColumns.Add(new AggregationDesc
                     {
-                        ColumnId = aggItem.GetProperty("ColumnId").GetString() ?? "",
-                        AggFunc = aggItem.GetProperty("AggFunc").GetString() ?? ""
+                        ColumnId = aggItem.TryGetProperty("ColumnId", out var ci) ? ci.GetString() ?? "" : "",
+                        AggFunc = aggItem.TryGetProperty("AggFunc", out var af) ? af.GetString() ?? "" : ""
                     });
                 }
             }

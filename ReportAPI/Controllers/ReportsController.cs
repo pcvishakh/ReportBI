@@ -108,7 +108,22 @@ namespace ReportAPI.Controllers
             // Convert IEnumerable<dynamic> to IEnumerable<IDictionary<string, object>>
             var parsedData = data.Cast<IDictionary<string, object>>();
 
-            var excelBytes = exportService.GenerateExcel(parsedData, report.GridState);
+            IEnumerable<ColumnDefinition>? columnDefinitions = null;
+            if (!string.IsNullOrWhiteSpace(report.ColumnDefinitions))
+            {
+                try
+                {
+                    columnDefinitions = System.Text.Json.JsonSerializer.Deserialize<IEnumerable<ColumnDefinition>>(
+                        report.ColumnDefinitions, 
+                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                }
+                catch
+                {
+                    // Fallback to null if deserialization fails
+                }
+            }
+
+            var excelBytes = exportService.GenerateExcel(parsedData, report.GridState, columnDefinitions);
 
             return File(excelBytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"{report.ReportName}_{DateTime.Now:yyyyMMddHHmmss}.xlsx");
         }

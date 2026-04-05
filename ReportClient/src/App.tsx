@@ -126,7 +126,33 @@ function App() {
     let columnDefs: any[] = [];
     if (columnDefinitions) {
       try {
-        columnDefs = JSON.parse(columnDefinitions);
+        const parsedDefs = JSON.parse(columnDefinitions);
+        columnDefs = parsedDefs.map((def: any) => ({
+          field: def.field,
+          headerName: def.headerName || def.field,
+          filter: true,
+          sortable: true,
+          resizable: true,
+          enableRowGroup: true,
+          enablePivot: true,
+          enableValue: true,
+          // Map backend dataType to AG Grid cellDataType
+          cellDataType: def.dataType === "number" ? "number" : 
+                        def.dataType === "date" ? "date" : 
+                        def.dataType === "boolean" ? "boolean" : 
+                        "text",
+          valueFormatter: (params: any) => {
+            if (def.dataType === "date" && params.value) {
+              const d = new Date(params.value);
+              if (!isNaN(d.getTime())) {
+                return (d.getMonth() + 1).toString().padStart(2, "0") + "/" +
+                       d.getDate().toString().padStart(2, "0") + "/" +
+                       d.getFullYear();
+              }
+            }
+            return params.value;
+          }
+        }));
       } catch (e) {
         console.error("Failed to parse backend column definitions", e);
       }
@@ -142,6 +168,17 @@ function App() {
         enableRowGroup: true,
         enablePivot: true,
         enableValue: true,
+        valueFormatter: (params: any) => {
+          if (params.value && typeof params.value === "string" && /^\d{4}-\d{2}-\d{2}/.test(params.value)) {
+            const d = new Date(params.value);
+            if (!isNaN(d.getTime())) {
+              return (d.getMonth() + 1).toString().padStart(2, "0") + "/" +
+                     d.getDate().toString().padStart(2, "0") + "/" +
+                     d.getFullYear();
+            }
+          }
+          return params.value;
+        },
       }));
     }
 
@@ -326,12 +363,7 @@ function App() {
         padding: "0",
       }}
     >
-      <header
-        className="header"
-        style={{ padding: "1rem 2rem", borderBottom: "1px solid #ddd" }}
-      >
-        <h1 style={{ margin: 0, fontSize: "1.5rem" }}>ReportBI Client</h1>
-      </header>
+
 
       {error && (
         <div

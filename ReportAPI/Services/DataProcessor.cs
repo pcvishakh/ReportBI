@@ -4,8 +4,8 @@ namespace ReportAPI.Services
 {
     public interface IDataProcessor
     {
-        List<IDictionary<string, object>> ProcessData(List<IDictionary<string, object>> data, LayoutConfig config);
-        object? ComputeAggregate(IEnumerable<IDictionary<string, object>> data, AggregationDesc agg);
+        List<IDictionary<string, object>> ProcessData(List<IDictionary<string, object>> data, LayoutConfig config, IEnumerable<ColumnDefinition>? columnDefinitions = null);
+        object? ComputeAggregate(IEnumerable<IDictionary<string, object>> data, AggregationDesc agg, ColumnDefinition? colDef = null);
         bool IsJson(object? val);
     }
 
@@ -13,13 +13,13 @@ namespace ReportAPI.Services
     {
         private const string BlankLabel = "(Blank)";
 
-        public List<IDictionary<string, object>> ProcessData(List<IDictionary<string, object>> data, LayoutConfig config)
+        public List<IDictionary<string, object>> ProcessData(List<IDictionary<string, object>> data, LayoutConfig config, IEnumerable<ColumnDefinition>? columnDefinitions = null)
         {
-            var filteredData = ApplyFilters(data, config.ColumnFilters);
-            return ApplySorting(filteredData, config.ColumnSorts);
+            var filteredData = ApplyFilters(data, config.ColumnFilters, columnDefinitions);
+            return ApplySorting(filteredData, config.ColumnSorts, columnDefinitions);
         }
 
-        private List<IDictionary<string, object>> ApplyFilters(List<IDictionary<string, object>> data, List<FilterDesc> filters)
+        private List<IDictionary<string, object>> ApplyFilters(List<IDictionary<string, object>> data, List<FilterDesc> filters, IEnumerable<ColumnDefinition>? columnDefinitions)
         {
             if (filters == null || !filters.Any()) return data;
 
@@ -27,13 +27,14 @@ namespace ReportAPI.Services
             {
                 foreach (var filter in filters)
                 {
+                    var colDef = columnDefinitions?.FirstOrDefault(c => c.Field == filter.ColumnId);
                     var cellValue = row.TryGetValue(filter.ColumnId, out var v) ? v : null;
                     bool passAll = filter.PredicatesOperator.Equals("AND", StringComparison.OrdinalIgnoreCase);
                     bool passAny = false;
 
                     foreach (var predicate in filter.Predicates)
                     {
-                        bool pass = EvaluatePredicate(cellValue, predicate);
+                        bool pass = EvaluatePredicate(cellValue, predicate, colDef);
                         if (passAll)
                         {
                             if (!pass) passAll = false;
@@ -57,7 +58,7 @@ namespace ReportAPI.Services
             }).ToList();
         }
 
-        private List<IDictionary<string, object>> ApplySorting(List<IDictionary<string, object>> data, List<SortDesc> sorts)
+        private List<IDictionary<string, object>> ApplySorting(List<IDictionary<string, object>> data, List<SortDesc> sorts, IEnumerable<ColumnDefinition>? columnDefinitions)
         {
             if (sorts == null || !sorts.Any()) return data;
 
@@ -65,7 +66,18 @@ namespace ReportAPI.Services
 
             foreach (var sort in sorts)
             {
-                Func<IDictionary<string, object>, object?> keySelector = x => x.TryGetValue(sort.ColumnId, out var v) && v != null && !string.IsNullOrWhiteSpace(v.ToString()) ? v : null;
+                var colDef = columnDefinitions?.FirstOrDefault(c => c.Field == sort.ColumnId);
+                Func<IDictionary<string, object>, object?> keySelector = x =>
+                {
+                    if (x.TryGetValue(sort.ColumnId, out var v) && v != null && !string.IsNullOrWhiteSpace(v.ToString()))
+                    {
+                        if (colDef?.DataType == "number" && double.TryParse(v.ToString(), out double d)) return d;
+                        if (colDef?.DataType == "date" && DateTime.TryParse(v.ToString(), out DateTime dt)) return dt;
+                        return v;
+                    }
+                    return null;
+                };
+                
                 bool isDesc = sort.SortOrder.Equals("Desc", StringComparison.OrdinalIgnoreCase);
 
                 if (query == null)
@@ -81,12 +93,20 @@ namespace ReportAPI.Services
             return query?.ToList() ?? data;
         }
 
-        public object? ComputeAggregate(IEnumerable<IDictionary<string, object>> data, AggregationDesc agg)
+        public object? ComputeAggregate(IEnumerable<IDictionary<string, object>> data, AggregationDesc agg, ColumnDefinition? colDef = null)
         {
             if (agg == null) return null;
             if (agg.AggFunc == "count") return $"({data.Count()})";
 
-            var vals = data.Select(x => x.TryGetValue(agg.ColumnId, out var val) && double.TryParse(val?.ToString(), out double d) ? d : (double?)null)
+            var vals = data.Select(x =>
+                {
+                    if (x.TryGetValue(agg.ColumnId, out var val) && val != null)
+                    {
+                        if (colDef?.DataType == "number" && double.TryParse(val.ToString(), out double d)) return d;
+                        if (double.TryParse(val.ToString(), out double dFallback)) return dFallback;
+                    }
+                    return (double?)null;
+                })
                 .Where(x => x.HasValue)
                 .Select(x => x!.Value)
                 .ToList();
@@ -103,7 +123,7 @@ namespace ReportAPI.Services
             };
         }
 
-        private bool EvaluatePredicate(object? value, PredicateDesc predicate)
+        private bool EvaluatePredicate(object? value, PredicateDesc predicate, ColumnDefinition? colDef)
         {
             if (predicate.PredicateId == "Blanks")
                 return value == null || string.IsNullOrWhiteSpace(value.ToString());
@@ -123,29 +143,61 @@ namespace ReportAPI.Services
                 "NotContains" => !strVal.Contains(inputStr, StringComparison.OrdinalIgnoreCase),
                 "StartsWith" => strVal.StartsWith(inputStr, StringComparison.OrdinalIgnoreCase),
                 "EndsWith" => strVal.EndsWith(inputStr, StringComparison.OrdinalIgnoreCase),
-                "GreaterThan" => double.TryParse(strVal, out double v1) && input0 is double i1 && v1 > i1,
-                "GreaterThanOrEqualTo" => double.TryParse(strVal, out double v2) && input0 is double i2 && v2 >= i2,
-                "LessThan" => double.TryParse(strVal, out double v3) && input0 is double i3 && v3 < i3,
-                "LessThanOrEqualTo" => double.TryParse(strVal, out double v4) && input0 is double i4 && v4 <= i4,
-                "Between" or "NotBetween" => EvaluateBetween(strVal, predicate),
+                "GreaterThan" => CompareValues(strVal, input0, colDef) > 0,
+                "GreaterThanOrEqualTo" => CompareValues(strVal, input0, colDef) >= 0,
+                "LessThan" => CompareValues(strVal, input0, colDef) < 0,
+                "LessThanOrEqualTo" => CompareValues(strVal, input0, colDef) <= 0,
+                "Between" or "NotBetween" => EvaluateBetween(strVal, predicate, colDef),
                 "In" or "NotIn" => EvaluateIn(strVal, predicate),
                 _ => true
             };
         }
 
-        private bool EvaluateBetween(string strVal, PredicateDesc predicate)
+        private int CompareValues(string strVal, object? input, ColumnDefinition? colDef)
+        {
+            if (input == null) return 0;
+            var inputStr = input.ToString() ?? "";
+
+            if (colDef?.DataType == "number" || double.TryParse(strVal, out _) || double.TryParse(inputStr, out _))
+            {
+                if (double.TryParse(strVal, out double v1) && double.TryParse(inputStr, out double v2))
+                    return v1.CompareTo(v2);
+            }
+            if (colDef?.DataType == "date" || DateTime.TryParse(strVal, out _) || DateTime.TryParse(inputStr, out _))
+            {
+                if (DateTime.TryParse(strVal, out DateTime d1) && DateTime.TryParse(inputStr, out DateTime d2))
+                    return d1.CompareTo(d2);
+            }
+
+            return string.Compare(strVal, inputStr, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool EvaluateBetween(string strVal, PredicateDesc predicate, ColumnDefinition? colDef)
         {
             if (predicate.Inputs.Count < 2) return false;
             var input0Str = predicate.Inputs[0]?.ToString() ?? "";
             var input1Str = predicate.Inputs[1]?.ToString() ?? "";
 
             bool isBetween;
-            if (double.TryParse(strVal, out double v) && double.TryParse(input0Str, out double min) && double.TryParse(input1Str, out double max))
-                isBetween = v >= min && v <= max;
-            else if (DateTime.TryParse(strVal, out DateTime dt) && DateTime.TryParse(input0Str, out DateTime dtMin) && DateTime.TryParse(input1Str, out DateTime dtMax))
-                isBetween = dt >= dtMin && dt <= dtMax;
+            if ((colDef?.DataType == "number" || double.TryParse(strVal, out _)) && double.TryParse(input0Str, out double min) && double.TryParse(input1Str, out double max))
+            {
+                if (double.TryParse(strVal, out double v))
+                    isBetween = v >= min && v <= max;
+                else
+                    return false;
+            }
+            else if ((colDef?.DataType == "date" || DateTime.TryParse(strVal, out _)) && DateTime.TryParse(input0Str, out DateTime dtMin) && DateTime.TryParse(input1Str, out DateTime dtMax))
+            {
+                if (DateTime.TryParse(strVal, out DateTime dt))
+                    isBetween = dt >= dtMin && dt <= dtMax;
+                else
+                    return false;
+            }
             else
-                return false;
+            {
+                isBetween = string.Compare(strVal, input0Str, StringComparison.OrdinalIgnoreCase) >= 0 &&
+                            string.Compare(strVal, input1Str, StringComparison.OrdinalIgnoreCase) <= 0;
+            }
 
             return predicate.PredicateId == "Between" ? isBetween : !isBetween;
         }
