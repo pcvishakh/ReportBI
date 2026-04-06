@@ -221,6 +221,14 @@ function App() {
       },
       rowGroupPanelShow: "always" as const,
       pivotPanelShow: "always" as const,
+      statusBar: {
+        statusPanels: [
+          {
+            statusPanel: "agTotalAndFilteredRowCountComponent",
+            align: "left",
+          },
+        ],
+      },
     };
   }, [reportData, columnDefinitions]);
 

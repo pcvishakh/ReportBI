@@ -254,36 +254,57 @@ namespace ReportAPI.Services
             string rsName = EnsureUniqueSheetName(workbook, SanitizeSheetName(rawSheetName), sheetIndex);
             var worksheet = workbook.Worksheets.Add(rsName);
 
-            var visibleColumns = GetVisibleColumns(config, filteredData);
+            var visibleColumns = GetVisibleColumns(config, filteredData, columnDefinitions);
             WriteGridHeaders(worksheet, visibleColumns, config.TableAggregationColumns, columnDefinitions);
 
             int currentRow = 2;
             if (config.RowGroupedColumns.Any())
             {
-                WriteGroup(worksheet, filteredData, config.RowGroupedColumns, 0, visibleColumns, config.TableAggregationColumns, config.ColumnSorts, ref currentRow, 1, columnDefinitions);
+                WriteGroup(worksheet, filteredData, config.RowGroupedColumns, 0, visibleColumns, config.TableAggregationColumns, config, ref currentRow, 1, columnDefinitions);
                 worksheet.Outline.SummaryVLocation = XLOutlineSummaryVLocation.Top;
             }
             else
             {
-                WriteGridData(worksheet, filteredData, visibleColumns, ref currentRow, columnDefinitions);
+                WriteGridData(worksheet, filteredData, visibleColumns, ref currentRow, config, columnDefinitions);
             }
 
             worksheet.Columns().AdjustToContents();
         }
 
-        private List<string> GetVisibleColumns(LayoutConfig config, List<IDictionary<string, object>> data)
+        private List<string> GetVisibleColumns(LayoutConfig config, List<IDictionary<string, object>> data, IEnumerable<ColumnDefinition>? columnDefinitions)
         {
             var tableCols = config.TableColumns;
-            if (!tableCols.Any() && data.Any())
+            if (!tableCols.Any())
             {
-                var firstRow = data.First();
-                tableCols = firstRow.Keys.Where(k => !_dataProcessor.IsJson(firstRow[k])).ToList();
+                if (columnDefinitions != null && columnDefinitions.Any())
+                {
+                    tableCols = columnDefinitions.Select(cd => cd.Field).ToList();
+                }
+                else if (data.Any())
+                {
+                    var firstRow = data.First();
+                    tableCols = firstRow.Keys.Where(k => !_dataProcessor.IsJson(firstRow[k])).ToList();
+                }
             }
             tableCols.Remove("ag-Grid-AutoColumn");
 
             var visibleColumns = new List<string>();
             if (config.RowGroupedColumns.Any()) visibleColumns.Add("Group");
-            visibleColumns.AddRange(tableCols.Where(c => !config.ColumnVisibility.TryGetValue(c, out var isVis) || isVis));
+            
+            foreach (var col in tableCols)
+            {
+                bool isVisible = !config.ColumnVisibility.TryGetValue(col, out var isVis) || isVis;
+                if (isVisible)
+                {
+                    var colDef = columnDefinitions?.FirstOrDefault(cd => cd.Field == col);
+                    bool isJson = colDef?.DataType == "json" || (data.Any() && data.First().TryGetValue(col, out var val) && _dataProcessor.IsJson(val));
+                    
+                    if (!isJson)
+                    {
+                        visibleColumns.Add(col);
+                    }
+                }
+            }
 
             if (!visibleColumns.Any()) visibleColumns.Add("Data");
             return visibleColumns;
@@ -305,8 +326,9 @@ namespace ReportAPI.Services
             }
         }
 
-        private void WriteGridData(IXLWorksheet sheet, List<IDictionary<string, object>> data, List<string> columns, ref int currentRow, IEnumerable<ColumnDefinition>? columnDefinitions)
+        private void WriteGridData(IXLWorksheet sheet, List<IDictionary<string, object>> data, List<string> columns, ref int currentRow, LayoutConfig config, IEnumerable<ColumnDefinition>? columnDefinitions)
         {
+            var jsonCols = GetVisibleJsonColumns(config, data, columnDefinitions);
             foreach (var row in data)
             {
                 for (int c = 0; c < columns.Count; c++)
@@ -319,15 +341,22 @@ namespace ReportAPI.Services
                         ApplyFormat(cell, colName, columnDefinitions);
                     }
                 }
+                
+                int mainRow = currentRow;
                 currentRow++;
+                
+                if (jsonCols.Any())
+                {
+                    WriteDetailRow(sheet, row, jsonCols, columns.Count, ref currentRow, mainRow, columnDefinitions);
+                }
             }
         }
 
-        private void WriteGroup(IXLWorksheet worksheet, IEnumerable<IDictionary<string, object>> data, List<string> groupCols, int groupLevel, List<string> visibleCols, List<AggregationDesc> aggs, List<SortDesc> sorts, ref int currentRow, int outlineLevel, IEnumerable<ColumnDefinition>? columnDefinitions)
+        private void WriteGroup(IXLWorksheet worksheet, IEnumerable<IDictionary<string, object>> data, List<string> groupCols, int groupLevel, List<string> visibleCols, List<AggregationDesc> aggs, LayoutConfig config, ref int currentRow, int outlineLevel, IEnumerable<ColumnDefinition>? columnDefinitions)
         {
             if (groupLevel >= groupCols.Count)
             {
-                WriteRawGroupData(worksheet, data, visibleCols, ref currentRow, outlineLevel, columnDefinitions);
+                WriteRawGroupData(worksheet, data, visibleCols, ref currentRow, outlineLevel, config, columnDefinitions);
                 return;
             }
 
@@ -337,13 +366,16 @@ namespace ReportAPI.Services
             foreach (var grp in grouped)
             {
                 WriteGroupHeader(worksheet, grp, groupLevel, visibleCols, aggs, ref currentRow, outlineLevel, columnDefinitions);
-                WriteGroup(worksheet, grp.ToList(), groupCols, groupLevel + 1, visibleCols, aggs, sorts, ref currentRow, outlineLevel + 1, columnDefinitions);
+                WriteGroup(worksheet, grp.ToList(), groupCols, groupLevel + 1, visibleCols, aggs, config, ref currentRow, outlineLevel + 1, columnDefinitions);
             }
         }
 
-        private void WriteRawGroupData(IXLWorksheet worksheet, IEnumerable<IDictionary<string, object>> data, List<string> visibleCols, ref int currentRow, int outlineLevel, IEnumerable<ColumnDefinition>? columnDefinitions)
+        private void WriteRawGroupData(IXLWorksheet worksheet, IEnumerable<IDictionary<string, object>> data, List<string> visibleCols, ref int currentRow, int outlineLevel, LayoutConfig config, IEnumerable<ColumnDefinition>? columnDefinitions)
         {
-            foreach (var row in data)
+            var dataList = data.ToList();
+            var jsonCols = GetVisibleJsonColumns(config, dataList, columnDefinitions);
+            
+            foreach (var row in dataList)
             {
                 for (int c = 1; c < visibleCols.Count; c++)
                 {
@@ -355,8 +387,15 @@ namespace ReportAPI.Services
                         ApplyFormat(cell, colName, columnDefinitions);
                     }
                 }
+                
+                int mainRow = currentRow;
                 if (outlineLevel > 1) worksheet.Row(currentRow).OutlineLevel = outlineLevel - 1;
                 currentRow++;
+                
+                if (jsonCols.Any())
+                {
+                    WriteDetailRow(worksheet, row, jsonCols, visibleCols.Count, ref currentRow, mainRow, columnDefinitions, outlineLevel);
+                }
             }
         }
 
@@ -391,6 +430,159 @@ namespace ReportAPI.Services
             var colDef = columnDefinitions?.FirstOrDefault(cd => cd.Field == colName);
             if (colDef?.DataType == "date")
                 cell.Style.NumberFormat.Format = "mm/dd/yyyy";
+        }
+
+        private List<string> GetVisibleJsonColumns(LayoutConfig config, List<IDictionary<string, object>> data, IEnumerable<ColumnDefinition>? columnDefinitions)
+        {
+            var jsonCols = new List<string>();
+            var allPossibleCols = config.TableColumns.Any() ? config.TableColumns : (columnDefinitions?.Select(cd => cd.Field).ToList() ?? new List<string>());
+            
+            foreach (var col in allPossibleCols)
+            {
+                bool isVisible = !config.ColumnVisibility.TryGetValue(col, out var isVis) || isVis;
+                if (isVisible)
+                {
+                    var colDef = columnDefinitions?.FirstOrDefault(cd => cd.Field == col);
+                    bool isJson = colDef?.DataType == "json" || (data.Any() && data.First().TryGetValue(col, out var val) && _dataProcessor.IsJson(val));
+                    if (isJson)
+                    {
+                        jsonCols.Add(col);
+                    }
+                }
+            }
+            return jsonCols;
+        }
+
+        private void WriteDetailRow(IXLWorksheet sheet, IDictionary<string, object> row, List<string> jsonCols, int totalCols, ref int currentRow, int mainRow, IEnumerable<ColumnDefinition>? columnDefinitions, int outlineLevel = 1)
+        {
+            foreach (var col in jsonCols)
+            {
+                if (row.TryGetValue(col, out var val) && val != null && !string.IsNullOrWhiteSpace(val.ToString()))
+                {
+                    string header = GetHeaderName(col, columnDefinitions);
+                    string rawJson = val.ToString()!;
+                    
+                    try 
+                    {
+                        using var jsonDoc = JsonDocument.Parse(rawJson);
+                        WriteJsonTable(sheet, jsonDoc.RootElement, col, header, 2, ref currentRow, outlineLevel, columnDefinitions);
+                    } 
+                    catch 
+                    {
+                        // Fallback to raw string if not valid JSON
+                        var detailCell = sheet.Cell(currentRow, 2);
+                        detailCell.Value = $"{header}: {rawJson}";
+                        sheet.Row(currentRow).OutlineLevel = outlineLevel;
+                        currentRow++;
+                    }
+                }
+            }
+        }
+
+        private void WriteJsonTable(IXLWorksheet sheet, JsonElement element, string colName, string label, int colIndent, ref int currentRow, int outlineLevel, IEnumerable<ColumnDefinition>? columnDefinitions)
+        {
+            // First, write the field header
+            var fieldHeader = sheet.Cell(currentRow, colIndent);
+            fieldHeader.Value = label;
+            fieldHeader.Style.Font.Bold = true;
+            sheet.Row(currentRow).OutlineLevel = outlineLevel;
+            currentRow++;
+
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                var keys = columnDefinitions?.Where(cd => cd.ParentField == colName).Select(cd => cd.Field).ToList();
+                bool useFixedKeys = keys != null && keys.Any();
+                if (!useFixedKeys)
+                {
+                    keys = element.EnumerateObject().Select(p => p.Name).ToList();
+                }
+
+                if (keys == null || !keys.Any()) return;
+
+                // Write Header Row for JSON keys
+                for (int i = 0; i < keys.Count; i++)
+                {
+                    var cell = sheet.Cell(currentRow, colIndent + i);
+                    cell.Value = GetHeaderName(keys[i], columnDefinitions);
+                    cell.Style.Font.Bold = true;
+                    cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#F2F2F2");
+                }
+                sheet.Row(currentRow).OutlineLevel = outlineLevel;
+                currentRow++;
+
+                // Write Data Row for JSON values
+                for (int i = 0; i < keys.Count; i++)
+                {
+                    string val = "";
+                    if (element.TryGetProperty(keys[i], out var propValue))
+                        val = propValue.ToString();
+                    
+                    sheet.Cell(currentRow, colIndent + i).Value = XLCellValue.FromObject(val);
+                }
+                sheet.Row(currentRow).OutlineLevel = outlineLevel;
+                currentRow++;
+            }
+            else if (element.ValueKind == JsonValueKind.Array)
+            {
+                var list = element.EnumerateArray().ToList();
+                if (!list.Any()) return;
+
+                if (list.All(item => item.ValueKind == JsonValueKind.Object))
+                {
+                    // Check for predefined keys
+                    var keys = columnDefinitions?.Where(cd => cd.ParentField == colName).Select(cd => cd.Field).ToList();
+                    bool useFixedKeys = keys != null && keys.Any();
+                    if (!useFixedKeys)
+                    {
+                        keys = list.SelectMany(item => item.EnumerateObject().Select(p => p.Name)).Distinct().ToList();
+                    }
+                    
+                    if (keys == null || !keys.Any()) return;
+
+                    // Write Header Row
+                    for (int i = 0; i < keys.Count; i++)
+                    {
+                        var cell = sheet.Cell(currentRow, colIndent + i);
+                        cell.Value = GetHeaderName(keys[i], columnDefinitions);
+                        cell.Style.Font.Bold = true;
+                        cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#F2F2F2");
+                    }
+                    sheet.Row(currentRow).OutlineLevel = outlineLevel;
+                    currentRow++;
+
+                    // Write Data Rows
+                    foreach (var item in list)
+                    {
+                        for (int i = 0; i < keys.Count; i++)
+                        {
+                            string val = "";
+                            if (item.TryGetProperty(keys[i], out var prop))
+                                val = prop.ToString();
+                            
+                            sheet.Cell(currentRow, colIndent + i).Value = XLCellValue.FromObject(val);
+                        }
+                        sheet.Row(currentRow).OutlineLevel = outlineLevel;
+                        currentRow++;
+                    }
+                }
+                else
+                {
+                    // Flat array
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        sheet.Cell(currentRow, colIndent).Value = XLCellValue.FromObject(list[i].ToString());
+                        sheet.Row(currentRow).OutlineLevel = outlineLevel;
+                        currentRow++;
+                    }
+                }
+            }
+            else
+            {
+                // Literal value
+                sheet.Cell(currentRow, colIndent).Value = XLCellValue.FromObject(element.ToString());
+                sheet.Row(currentRow).OutlineLevel = outlineLevel;
+                currentRow++;
+            }
         }
 
         private string GetHeaderName(string field, IEnumerable<ColumnDefinition>? columnDefinitions)

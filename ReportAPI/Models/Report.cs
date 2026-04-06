@@ -16,5 +16,6 @@ namespace ReportAPI.Models
         public string Field { get; set; } = string.Empty;
         public string HeaderName { get; set; } = string.Empty;
         public string? DataType { get; set; }
+        public string? ParentField { get; set; }
     }
 }
