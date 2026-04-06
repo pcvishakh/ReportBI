@@ -41,17 +41,4 @@ namespace ReportAPI.Models
         public string AggFunc { get; set; } = ""; 
     }
 
-    public class StyledColumnDesc 
-    { 
-        public string ColumnId { get; set; } = ""; 
-        public List<CellRangeDesc> GradientRanges { get; set; } = new(); 
-        public List<CellRangeDesc> PercentBarRanges { get; set; } = new(); 
-    }
-
-    public class CellRangeDesc 
-    { 
-        public double? Min { get; set; } 
-        public double? Max { get; set; } 
-        public string Color { get; set; } = ""; 
-    }
 }

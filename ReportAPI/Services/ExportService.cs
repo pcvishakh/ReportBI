@@ -22,7 +22,7 @@ namespace ReportAPI.Services
             var dataList = data.ToList();
 
             using var workbook = new XLWorkbook();
-            var (styledColumns, layouts) = _configParser.ParseGridState(gridStateJson);
+            var layouts = _configParser.ParseGridState(gridStateJson);
 
             if (layouts.Any())
             {
@@ -30,12 +30,12 @@ namespace ReportAPI.Services
                 {
                     var layout = layouts[i];
                     string sheetName = string.IsNullOrWhiteSpace(layout.Name) ? $"Export_{i + 1}" : layout.Name;
-                    ProcessLayout(workbook, dataList, layout, sheetName, i + 1, styledColumns, columnDefinitions);
+                    ProcessLayout(workbook, dataList, layout, sheetName, i + 1, columnDefinitions);
                 }
             }
             else
             {
-                ProcessLayout(workbook, dataList, new LayoutConfig { Name = "Export" }, "Export", 1, styledColumns, columnDefinitions);
+                ProcessLayout(workbook, dataList, new LayoutConfig { Name = "Export" }, "Export", 1, columnDefinitions);
             }
 
             using var ms = new MemoryStream();
@@ -43,17 +43,17 @@ namespace ReportAPI.Services
             return ms.ToArray();
         }
 
-        private void ProcessLayout(XLWorkbook workbook, List<IDictionary<string, object>> dataList, LayoutConfig config, string rawSheetName, int sheetIndex, List<StyledColumnDesc> styledColumns, IEnumerable<ColumnDefinition>? columnDefinitions)
+        private void ProcessLayout(XLWorkbook workbook, List<IDictionary<string, object>> dataList, LayoutConfig config, string rawSheetName, int sheetIndex, IEnumerable<ColumnDefinition>? columnDefinitions)
         {
             var processedData = _dataProcessor.ProcessData(dataList, config, columnDefinitions);
 
             if (config.PivotColumns.Any() || config.PivotGroupedColumns.Any())
             {
-                GeneratePivotTable(workbook, processedData, config, rawSheetName, sheetIndex);
+                GeneratePivotTable(workbook, processedData, config, rawSheetName, sheetIndex, columnDefinitions);
             }
             else
             {
-                GenerateGridSheet(workbook, processedData, config, rawSheetName, sheetIndex, styledColumns, columnDefinitions);
+                GenerateGridSheet(workbook, processedData, config, rawSheetName, sheetIndex, columnDefinitions);
             }
         }
 
@@ -77,7 +77,7 @@ namespace ReportAPI.Services
             return currentName;
         }
 
-        private void GeneratePivotTable(XLWorkbook workbook, List<IDictionary<string, object>> filteredData, LayoutConfig config, string rawSheetName, int sheetIndex)
+        private void GeneratePivotTable(XLWorkbook workbook, List<IDictionary<string, object>> filteredData, LayoutConfig config, string rawSheetName, int sheetIndex, IEnumerable<ColumnDefinition>? columnDefinitions)
         {
             string dataSheetName = SanitizeSheetName(rawSheetName + "_Raw");
             string ptSheetName = SanitizeSheetName(rawSheetName);
@@ -103,12 +103,12 @@ namespace ReportAPI.Services
             var rowFrequencies = CalculateHierarchicalFrequencies(filteredData, pivotCols.RowCols);
             var colFrequencies = CalculateHierarchicalFrequencies(filteredData, pivotCols.ColCols);
 
-            WritePivotData(dataSheet, filteredData, allKeysToInclude, pivotCols.RawVisibleCols, pivotCols.DimensionCols, pivotCols.RowCols, pivotCols.ColCols, rowLabelMap, colLabelMap, rowFrequencies, colFrequencies);
+            WritePivotData(dataSheet, filteredData, allKeysToInclude, pivotCols.RawVisibleCols, pivotCols.DimensionCols, pivotCols.RowCols, pivotCols.ColCols, rowLabelMap, colLabelMap, rowFrequencies, colFrequencies, columnDefinitions);
 
             var ptSheet = workbook.Worksheets.Add(ptSheetName);
             if (filteredData.Any() && allKeysToInclude.Any())
             {
-                SetupPivotTable(ptSheet, dataSheet, filteredData.Count, allKeysToInclude, config, rowLabelMap, colLabelMap);
+                SetupPivotTable(ptSheet, dataSheet, filteredData.Count, allKeysToInclude, config, rowLabelMap, colLabelMap, columnDefinitions);
             }
 
             dataSheet.Hide();
@@ -154,11 +154,12 @@ namespace ReportAPI.Services
             return frequencies;
         }
 
-        private void WritePivotData(IXLWorksheet sheet, List<IDictionary<string, object>> data, List<string> allKeysToInclude, List<string> rawVisibleCols, List<string> dimensionCols, List<string> rowCols, List<string> colCols, Dictionary<string, string> rowMap, Dictionary<string, string> colMap, Dictionary<string, int> rowFreqs, Dictionary<string, int> colFreqs)
+        private void WritePivotData(IXLWorksheet sheet, List<IDictionary<string, object>> data, List<string> allKeysToInclude, List<string> rawVisibleCols, List<string> dimensionCols, List<string> rowCols, List<string> colCols, Dictionary<string, string> rowMap, Dictionary<string, string> colMap, Dictionary<string, int> rowFreqs, Dictionary<string, int> colFreqs, IEnumerable<ColumnDefinition>? columnDefinitions)
         {
             for (int i = 0; i < allKeysToInclude.Count; i++)
             {
-                sheet.Cell(1, i + 1).Value = allKeysToInclude[i];
+                string field = allKeysToInclude[i];
+                sheet.Cell(1, i + 1).Value = GetHeaderName(field, columnDefinitions);
                 sheet.Cell(1, i + 1).Style.Font.Bold = true;
             }
 
@@ -216,7 +217,7 @@ namespace ReportAPI.Services
             }
         }
 
-        private void SetupPivotTable(IXLWorksheet ptSheet, IXLWorksheet dataSheet, int rowCount, List<string> allKeys, LayoutConfig config, Dictionary<string, string> rowMap, Dictionary<string, string> colMap)
+        private void SetupPivotTable(IXLWorksheet ptSheet, IXLWorksheet dataSheet, int rowCount, List<string> allKeys, LayoutConfig config, Dictionary<string, string> rowMap, Dictionary<string, string> colMap, IEnumerable<ColumnDefinition>? columnDefinitions)
         {
             var sourceRange = dataSheet.Range(1, 1, rowCount + 1, allKeys.Count);
             var pt = ptSheet.PivotTables.Add("PivotTable_" + ptSheet.Name.Replace(" ", "_"), ptSheet.Cell(1, 1), sourceRange);
@@ -231,8 +232,9 @@ namespace ReportAPI.Services
             }
             foreach (var agg in config.PivotAggregationColumns)
             {
-                var field = pt.Values.Add(agg.ColumnId);
-                field.CustomName = $"{agg.AggFunc}({agg.ColumnId})";
+                string headerName = GetHeaderName(agg.ColumnId, columnDefinitions);
+                var field = pt.Values.Add(headerName);
+                field.CustomName = $"{agg.AggFunc}({headerName})";
                 field.SummaryFormula = agg.AggFunc.ToLower() switch
                 {
                     "sum" => XLPivotSummary.Sum,
@@ -247,13 +249,13 @@ namespace ReportAPI.Services
             pt.Theme = XLPivotTableTheme.PivotStyleMedium9;
         }
 
-        private void GenerateGridSheet(XLWorkbook workbook, List<IDictionary<string, object>> filteredData, LayoutConfig config, string rawSheetName, int sheetIndex, List<StyledColumnDesc> styledColumns, IEnumerable<ColumnDefinition>? columnDefinitions)
+        private void GenerateGridSheet(XLWorkbook workbook, List<IDictionary<string, object>> filteredData, LayoutConfig config, string rawSheetName, int sheetIndex, IEnumerable<ColumnDefinition>? columnDefinitions)
         {
             string rsName = EnsureUniqueSheetName(workbook, SanitizeSheetName(rawSheetName), sheetIndex);
             var worksheet = workbook.Worksheets.Add(rsName);
 
             var visibleColumns = GetVisibleColumns(config, filteredData);
-            WriteGridHeaders(worksheet, visibleColumns, config.TableAggregationColumns);
+            WriteGridHeaders(worksheet, visibleColumns, config.TableAggregationColumns, columnDefinitions);
 
             int currentRow = 2;
             if (config.RowGroupedColumns.Any())
@@ -267,7 +269,6 @@ namespace ReportAPI.Services
             }
 
             worksheet.Columns().AdjustToContents();
-            ApplyConditionalFormatting(worksheet, visibleColumns, styledColumns, currentRow);
         }
 
         private List<string> GetVisibleColumns(LayoutConfig config, List<IDictionary<string, object>> data)
@@ -288,12 +289,13 @@ namespace ReportAPI.Services
             return visibleColumns;
         }
 
-        private void WriteGridHeaders(IXLWorksheet sheet, List<string> columns, List<AggregationDesc> aggs)
+        private void WriteGridHeaders(IXLWorksheet sheet, List<string> columns, List<AggregationDesc> aggs, IEnumerable<ColumnDefinition>? columnDefinitions)
         {
             for (int i = 0; i < columns.Count; i++)
             {
-                string headerName = columns[i];
-                var aggDesc = aggs.FirstOrDefault(a => a.ColumnId == headerName);
+                string field = columns[i];
+                string headerName = GetHeaderName(field, columnDefinitions);
+                var aggDesc = aggs.FirstOrDefault(a => a.ColumnId == field);
                 if (aggDesc != null && !string.IsNullOrWhiteSpace(aggDesc.AggFunc))
                     headerName = $"{aggDesc.AggFunc}({headerName})";
 
@@ -391,29 +393,11 @@ namespace ReportAPI.Services
                 cell.Style.NumberFormat.Format = "mm/dd/yyyy";
         }
 
-        private void ApplyConditionalFormatting(IXLWorksheet worksheet, List<string> visibleColumns, List<StyledColumnDesc> styledColumns, int currentRow)
+        private string GetHeaderName(string field, IEnumerable<ColumnDefinition>? columnDefinitions)
         {
-            if (currentRow <= 2) return;
-            foreach (var styledCol in styledColumns)
-            {
-                int colIndex = visibleColumns.IndexOf(styledCol.ColumnId);
-                if (colIndex >= 0)
-                {
-                    var range = worksheet.Range(2, colIndex + 1, currentRow - 1, colIndex + 1);
-                    foreach (var cr in styledCol.GradientRanges)
-                        ApplyGradientRange(range, cr);
-                }
-            }
-        }
-
-        private void ApplyGradientRange(IXLRange range, CellRangeDesc cr)
-        {
-            if (cr.Min.HasValue && cr.Max.HasValue)
-                range.AddConditionalFormat().WhenBetween(cr.Min.Value, cr.Max.Value).Fill.SetBackgroundColor(XLColor.FromHtml(cr.Color));
-            else if (cr.Min.HasValue)
-                range.AddConditionalFormat().WhenEqualOrGreaterThan(cr.Min.Value).Fill.SetBackgroundColor(XLColor.FromHtml(cr.Color));
-            else if (cr.Max.HasValue)
-                range.AddConditionalFormat().WhenEqualOrLessThan(cr.Max.Value).Fill.SetBackgroundColor(XLColor.FromHtml(cr.Color));
+            if (field == "Group") return "Group";
+            var colDef = columnDefinitions?.FirstOrDefault(cd => cd.Field == field);
+            return colDef?.HeaderName ?? field;
         }
     }
 }

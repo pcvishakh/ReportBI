@@ -5,25 +5,22 @@ namespace ReportAPI.Services
 {
     public interface IExportConfigParser
     {
-        (List<StyledColumnDesc> StyledColumns, List<LayoutConfig> Layouts) ParseGridState(string? gridStateJson);
+        List<LayoutConfig> ParseGridState(string? gridStateJson);
     }
 
     public class ExportConfigParser : IExportConfigParser
     {
-        public (List<StyledColumnDesc> StyledColumns, List<LayoutConfig> Layouts) ParseGridState(string? gridStateJson)
+        public List<LayoutConfig> ParseGridState(string? gridStateJson)
         {
-            var styledColumns = new List<StyledColumnDesc>();
             var layouts = new List<LayoutConfig>();
 
             if (string.IsNullOrWhiteSpace(gridStateJson))
-                return (styledColumns, layouts);
+                return layouts;
 
             try
             {
                 using var doc = JsonDocument.Parse(gridStateJson);
                 var root = doc.RootElement;
-
-                styledColumns = ParseStyledColumns(root);
 
                 if (root.TryGetProperty("Layout", out var layoutEl) &&
                     layoutEl.TryGetProperty("Layouts", out var layoutsEl) &&
@@ -41,56 +38,7 @@ namespace ReportAPI.Services
                 // Silently fail as in the original code
             }
 
-            return (styledColumns, layouts);
-        }
-
-        private List<StyledColumnDesc> ParseStyledColumns(JsonElement root)
-        {
-            var styledColumns = new List<StyledColumnDesc>();
-            if (root.TryGetProperty("StyledColumn", out var scEl) &&
-                scEl.TryGetProperty("StyledColumns", out var scsEl) &&
-                scsEl.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var scItem in scsEl.EnumerateArray())
-                {
-                    var styledCol = new StyledColumnDesc
-                    {
-                        ColumnId = scItem.GetProperty("ColumnId").GetString() ?? ""
-                    };
-
-                    if (scItem.TryGetProperty("GradientStyle", out var gsEl) &&
-                        gsEl.TryGetProperty("CellRanges", out var gcrsEl) &&
-                        gcrsEl.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (var crItem in gcrsEl.EnumerateArray())
-                        {
-                            styledCol.GradientRanges.Add(ParseCellRange(crItem));
-                        }
-                    }
-
-                    if (scItem.TryGetProperty("PercentBarStyle", out var psEl) &&
-                        psEl.TryGetProperty("CellRanges", out var pcrsEl) &&
-                        pcrsEl.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (var crItem in pcrsEl.EnumerateArray())
-                        {
-                            styledCol.PercentBarRanges.Add(ParseCellRange(crItem));
-                        }
-                    }
-                    styledColumns.Add(styledCol);
-                }
-            }
-            return styledColumns;
-        }
-
-        private CellRangeDesc ParseCellRange(JsonElement crItem)
-        {
-            return new CellRangeDesc
-            {
-                Min = crItem.TryGetProperty("Min", out var minV) && minV.ValueKind == JsonValueKind.Number ? minV.GetDouble() : (double?)null,
-                Max = crItem.TryGetProperty("Max", out var maxV) && maxV.ValueKind == JsonValueKind.Number ? maxV.GetDouble() : (double?)null,
-                Color = crItem.TryGetProperty("Color", out var colV) ? colV.GetString() ?? "" : ""
-            };
+            return layouts;
         }
 
         private LayoutConfig ParseLayoutConfig(JsonElement layoutJson)
