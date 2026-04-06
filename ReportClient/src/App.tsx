@@ -120,6 +120,31 @@ function App() {
     }
   };
 
+  const handleExportCsv = async () => {
+    if (!selectedReport) return;
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/${selectedReport.reportID}/export-csv`,
+        {
+          method: "GET",
+        },
+      );
+      if (!res.ok) throw new Error("Failed to export report to CSV");
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${selectedReport.reportName}_export.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
   const agGridProps = useMemo(() => {
     if (!reportData || reportData.length === 0) return {};
 
@@ -459,19 +484,34 @@ function App() {
                   <h2 style={{ fontSize: "1.25rem", margin: 0 }}>
                     {selectedReport.reportName}
                   </h2>
-                  <button
-                    onClick={handleExportExcel}
-                    style={{
-                      padding: "0.5rem 1rem",
-                      background: "#1890ff",
-                      color: "white",
-                      border: "none",
-                      borderRadius: "4px",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Export Excel
-                  </button>
+                    <div style={{ display: "flex", gap: "0.5rem" }}>
+                      <button
+                        onClick={handleExportCsv}
+                        style={{
+                          padding: "0.5rem 1rem",
+                          background: "#52c41a",
+                          color: "white",
+                          border: "none",
+                          borderRadius: "4px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Export CSV
+                      </button>
+                      <button
+                        onClick={handleExportExcel}
+                        style={{
+                          padding: "0.5rem 1rem",
+                          background: "#1890ff",
+                          color: "white",
+                          border: "none",
+                          borderRadius: "4px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Export Excel
+                      </button>
+                    </div>
                 </div>
                 {loadingData
                   ? <p className="loading">Executing report...</p>

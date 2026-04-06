@@ -1,5 +1,7 @@
 using System.Text.Json;
 using ClosedXML.Excel;
+using CsvHelper;
+using System.Globalization;
 using ReportAPI.Models;
 
 namespace ReportAPI.Services
@@ -40,6 +42,70 @@ namespace ReportAPI.Services
 
             using var ms = new MemoryStream();
             workbook.SaveAs(ms);
+            return ms.ToArray();
+        }
+
+        public byte[] GenerateCsv(IEnumerable<IDictionary<string, object>> data, string? gridStateJson, IEnumerable<ColumnDefinition>? columnDefinitions = null)
+        {
+            if (data == null || !data.Any()) return Array.Empty<byte>();
+            var dataList = data.ToList();
+
+            var layouts = _configParser.ParseGridState(gridStateJson);
+            var config = layouts.FirstOrDefault() ?? new LayoutConfig { Name = "Export" };
+
+            var processedData = _dataProcessor.ProcessData(dataList, config, columnDefinitions);
+            var visibleColumns = GetVisibleColumns(config, processedData, columnDefinitions)
+                .Where(c => c != "Group")
+                .ToList();
+
+            using var ms = new MemoryStream();
+            using var writer = new StreamWriter(ms, System.Text.Encoding.UTF8);
+            using var csv = new CsvWriter(writer, CultureInfo.InvariantCulture);
+
+            // Write Headers
+            foreach (var col in visibleColumns)
+            {
+                csv.WriteField(GetHeaderName(col, columnDefinitions));
+            }
+            csv.NextRecord();
+
+            // Write Data
+            foreach (var row in processedData)
+            {
+                foreach (var col in visibleColumns)
+                {
+                    if (row.TryGetValue(col, out var val) && val != null)
+                    {
+                        var colDef = columnDefinitions?.FirstOrDefault(cd => cd.Field == col);
+                        if (colDef?.DataType == "date")
+                        {
+                            if (val is DateTime dt)
+                            {
+                                csv.WriteField(dt.ToString("MM/dd/yyyy"));
+                            }
+                            else if (DateTime.TryParse(val.ToString(), out DateTime dt2))
+                            {
+                                csv.WriteField(dt2.ToString("MM/dd/yyyy"));
+                            }
+                            else
+                            {
+                                csv.WriteField(val.ToString());
+                            }
+                        }
+                        else
+                        {
+                            csv.WriteField(val.ToString());
+                        }
+                    }
+                    else
+                    {
+                        csv.WriteField("");
+                    }
+                }
+                csv.NextRecord();
+            }
+
+            writer.Flush();
             return ms.ToArray();
         }
 

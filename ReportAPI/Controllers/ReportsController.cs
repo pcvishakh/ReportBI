@@ -132,6 +132,45 @@ namespace ReportAPI.Controllers
             return StatusCode(500, ex.Message);
         }
     }
+
+    [HttpGet("{id}/export-csv")]
+    public async Task<IActionResult> ExportReportCsv(int id, [FromServices] ReportAPI.Services.ExportService exportService)
+    {
+        try
+        {
+            var report = await _repository.GetReportByIdAsync(id);
+            if (report == null)
+                return NotFound();
+
+            if (string.IsNullOrWhiteSpace(report.ConnectionString) || string.IsNullOrWhiteSpace(report.ReportQuery))
+                return BadRequest("Report missing connection string or query.");
+
+            var data = await _repository.ExecuteReportQueryAsync(report.ReportQuery, report.ConnectionString);
+            var parsedData = data.Cast<IDictionary<string, object>>();
+
+            IEnumerable<ColumnDefinition>? columnDefinitions = null;
+            if (!string.IsNullOrWhiteSpace(report.ColumnDefinitions))
+            {
+                try
+                {
+                    columnDefinitions = System.Text.Json.JsonSerializer.Deserialize<IEnumerable<ColumnDefinition>>(
+                        report.ColumnDefinitions, 
+                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                }
+                catch
+                {
+                }
+            }
+
+            var csvBytes = exportService.GenerateCsv(parsedData, report.GridState, columnDefinitions);
+
+            return File(csvBytes, "text/csv", $"{report.ReportName}_{DateTime.Now:yyyyMMddHHmmss}.csv");
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, ex.Message);
+        }
+    }
 }
 
 public class UpdateStateRequest
