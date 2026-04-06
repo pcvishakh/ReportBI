@@ -163,6 +163,7 @@ namespace ReportAPI.Services
             var allKeysToInclude = pivotCols.RawVisibleCols
                 .Union(rowLabelMap.Values)
                 .Union(colLabelMap.Values)
+                .Append("__ROW_COUNT__")
                 .Distinct()
                 .ToList();
 
@@ -278,7 +279,14 @@ namespace ReportAPI.Services
                         labelValue = val!;
                     }
                     
-                    sheet.Cell(r + 2, labelColOffset + i + 1).Value = labelValue;
+                sheet.Cell(r + 2, labelColOffset + i + 1).Value = labelValue;
+                }
+                
+                // Write __ROW_COUNT__
+                int rowCountColIdx = allKeysToInclude.IndexOf("__ROW_COUNT__");
+                if (rowCountColIdx >= 0)
+                {
+                    sheet.Cell(r + 2, rowCountColIdx + 1).Value = 1;
                 }
             }
         }
@@ -299,7 +307,8 @@ namespace ReportAPI.Services
             foreach (var agg in config.PivotAggregationColumns)
             {
                 string headerName = GetHeaderName(agg.ColumnId, columnDefinitions);
-                var field = pt.Values.Add(headerName);
+                bool isCount = string.Equals(agg.AggFunc, "count", StringComparison.OrdinalIgnoreCase);
+                var field = pt.Values.Add(isCount ? "__ROW_COUNT__" : headerName);
                 field.CustomName = $"{agg.AggFunc}({headerName})";
                 field.SummaryFormula = agg.AggFunc.ToLower() switch
                 {

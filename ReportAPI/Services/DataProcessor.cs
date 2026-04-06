@@ -96,7 +96,7 @@ namespace ReportAPI.Services
         public object? ComputeAggregate(IEnumerable<IDictionary<string, object>> data, AggregationDesc agg, ColumnDefinition? colDef = null)
         {
             if (agg == null) return null;
-            if (agg.AggFunc == "count") return $"{data.Count()}";
+            if (string.Equals(agg.AggFunc, "count", StringComparison.OrdinalIgnoreCase)) return (long)data.Count();
 
             var vals = data.Select(x =>
                 {
